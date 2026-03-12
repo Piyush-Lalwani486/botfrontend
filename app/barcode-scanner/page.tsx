@@ -1,16 +1,4 @@
 "use client"
-/**
- * Barcode Scanner — Multi-Session Dashboard
- *
- * HOW SCANNING WORKS (no browser scanner needed):
- * ─────────────────────────────────────────────
- * 1. Start a session for a batch
- * 2. A webhook URL is generated for that session
- * 3. Set up "Barcode to PC" app (Android/iOS) with that URL
- * 4. Scan student ID barcodes → results appear live on this dashboard
- *
- * Also supports: manual barcode entry as fallback
- */
 import { useEffect, useState, useRef, useCallback } from "react"
 import { DashboardLayout } from "@/components/dashboard-layout"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -21,15 +9,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import {
   Play, Square, CheckCircle, Clock, XCircle, Loader2,
   Wifi, WifiOff, Plus, Download, Radio, Keyboard,
-  Smartphone, Copy, ExternalLink, Info
+  Smartphone, Copy, ExternalLink, CloudLightning, AlertCircle
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useToast } from "@/hooks/use-toast"
-import axios from "axios"
-import { io, Socket } from "socket.io-client"
+import type { Socket } from "socket.io-client"
 
-const API = "http://127.0.0.1:5000"
-const WS  = "http://127.0.0.1:5000"
+const API = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:5000"
+const WS  = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:5000"
 
 interface Batch { id: number; name: string }
 interface ScanEvent {
@@ -43,99 +30,109 @@ interface SessionInfo {
   present: number; late: number; is_active: boolean
 }
 interface LiveSession {
-  info:        SessionInfo
-  scans:       ScanEvent[]
-  lastScan:    ScanEvent | null
-  webhookUrl:  string
-  qrImg:       string
+  info:         SessionInfo
+  scans:        ScanEvent[]
+  lastScan:     ScanEvent | null
+  scannerUrl:   string
+  qrImg:        string
   scannerCount: number
 }
 
 const COLORS = [
-  { ring:"ring-[#F16265]", bg:"bg-[#F16265]/10", dot:"bg-[#F16265]",   text:"text-[#F16265]"   },
-  { ring:"ring-blue-500",  bg:"bg-blue-500/10",  dot:"bg-blue-500",    text:"text-blue-600"    },
-  { ring:"ring-emerald-500",bg:"bg-emerald-500/10",dot:"bg-emerald-500",text:"text-emerald-600" },
-  { ring:"ring-violet-500",bg:"bg-violet-500/10", dot:"bg-violet-500", text:"text-violet-600"  },
-  { ring:"ring-amber-500", bg:"bg-amber-500/10",  dot:"bg-amber-500",  text:"text-amber-600"   },
+  { ring:"ring-[#F16265]",   bg:"bg-[#F16265]/10",   dot:"bg-[#F16265]",    text:"text-[#F16265]"   },
+  { ring:"ring-blue-500",    bg:"bg-blue-500/10",    dot:"bg-blue-500",     text:"text-blue-600"    },
+  { ring:"ring-emerald-500", bg:"bg-emerald-500/10", dot:"bg-emerald-500",  text:"text-emerald-600" },
+  { ring:"ring-violet-500",  bg:"bg-violet-500/10",  dot:"bg-violet-500",   text:"text-violet-600"  },
+  { ring:"ring-amber-500",   bg:"bg-amber-500/10",   dot:"bg-amber-500",    text:"text-amber-600"   },
 ]
 
-// ── Setup instructions modal ──────────────────────────────────────
-function SetupModal({ url, qr, onClose }: { url: string; qr: string; onClose: () => void }) {
+function SetupModal({ url, qr, isTunnel, tunnelUrl, onClose }: {
+  url: string; qr: string; isTunnel: boolean; tunnelUrl: string | null; onClose: () => void
+}) {
   const { toast } = useToast()
-  const copy = () => { navigator.clipboard.writeText(url); toast({ title: "Copied!" }) }
+  const copy = (text: string) => { navigator.clipboard.writeText(text); toast({ title: "Copied!" }) }
 
   return (
     <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div className="p-6 space-y-5">
           <div>
-            <h2 className="text-lg font-bold">📱 Set Up Phone Scanner</h2>
-            <p className="text-sm text-gray-500 mt-1">Use any of these 3 methods — easiest first</p>
+            <h2 className="text-lg font-bold">📱 Connect Phone to Scan</h2>
+            <p className="text-sm text-gray-500 mt-1">Open this page on your phone — no app needed</p>
           </div>
 
-          {/* Method 1 — Barcode to PC */}
-          <div className="border rounded-xl p-4 space-y-2 bg-blue-50 border-blue-200">
-            <div className="flex items-center gap-2">
-              <span className="w-6 h-6 rounded-full bg-blue-600 text-white text-xs flex items-center justify-center font-bold">1</span>
-              <p className="font-semibold text-blue-800">Barcode to PC (Recommended — Free)</p>
-            </div>
-            <ol className="text-sm text-blue-700 space-y-1 pl-8 list-decimal">
-              <li>Install <strong>Barcode to PC</strong> on your phone (Android / iPhone)</li>
-              <li>Open the app → tap <strong>Settings</strong> → <strong>Server URL</strong></li>
-              <li>Paste this URL:</li>
-            </ol>
-            <div className="flex items-center gap-2 bg-white rounded-lg border border-blue-200 px-3 py-2 mt-1">
-              <code className="flex-1 text-xs break-all text-gray-800 font-mono">{url}</code>
-              <button onClick={copy} className="text-blue-600 hover:text-blue-800 flex-shrink-0">
-                <Copy className="w-4 h-4" />
-              </button>
-            </div>
-            <ol className="text-sm text-blue-700 space-y-1 pl-8 list-decimal" start={4}>
-              <li>Set <strong>Method: POST</strong>, Body: <code className="bg-white px-1 rounded text-xs">{`{"barcode": "$CODE"}`}</code></li>
-              <li>Start scanning — results appear live on dashboard</li>
-            </ol>
-            <div className="flex gap-2 pt-1">
-              <a href="https://play.google.com/store/apps/details?id=com.barcodetopc.barcodetopc" target="_blank"
-                className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded-lg flex items-center gap-1 hover:bg-blue-700">
-                <ExternalLink className="w-3 h-3" /> Android
-              </a>
-              <a href="https://apps.apple.com/app/barcode-to-pc/id1180278965" target="_blank"
-                className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded-lg flex items-center gap-1 hover:bg-blue-700">
-                <ExternalLink className="w-3 h-3" /> iPhone
-              </a>
-            </div>
-          </div>
-
-          {/* Method 2 — Scan to URL apps */}
-          <div className="border rounded-xl p-4 space-y-2">
-            <div className="flex items-center gap-2">
-              <span className="w-6 h-6 rounded-full bg-gray-600 text-white text-xs flex items-center justify-center font-bold">2</span>
-              <p className="font-semibold">Any "Scan to URL" app</p>
-            </div>
-            <p className="text-sm text-gray-600">Apps like <strong>Automate</strong>, <strong>Tasker</strong>, or <strong>HTTP Request Shortcuts</strong> — set URL template to:</p>
-            <div className="flex items-center gap-2 bg-gray-50 rounded-lg border px-3 py-2">
-              <code className="flex-1 text-xs break-all text-gray-700 font-mono">{url}/{"BARCODE_VALUE"}</code>
-              <button onClick={() => { navigator.clipboard.writeText(url + "/$CODE"); toast({ title:"Copied!" }) }}
-                className="text-gray-500 hover:text-gray-700 flex-shrink-0"><Copy className="w-4 h-4" /></button>
-            </div>
-            <p className="text-xs text-gray-500">Replace <code>BARCODE_VALUE</code> with your app's scanned code variable</p>
-          </div>
-
-          {/* Method 3 — QR for easy URL copy */}
-          <div className="border rounded-xl p-4 space-y-2">
-            <div className="flex items-center gap-2">
-              <span className="w-6 h-6 rounded-full bg-gray-600 text-white text-xs flex items-center justify-center font-bold">3</span>
-              <p className="font-semibold">Scan QR to copy URL on phone</p>
-            </div>
-            {qr ? (
-              <div className="flex items-center gap-4">
-                <img src={qr} alt="QR" className="w-28 h-28 rounded-xl border" />
-                <p className="text-sm text-gray-500">Scan this QR with your phone camera to open the webhook URL — then paste it into your scanner app settings</p>
+          {isTunnel ? (
+            <div className="border-2 border-green-300 bg-green-50 rounded-xl p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <CloudLightning className="w-5 h-5 text-green-600" />
+                <p className="font-semibold text-green-800">Cloudflare Tunnel Active ✅</p>
               </div>
-            ) : (
-              <p className="text-sm text-gray-400">QR not available</p>
-            )}
-          </div>
+              <p className="text-sm text-green-700">Works on <strong>any network</strong> — mobile data, any WiFi, anything.</p>
+              <div className="flex items-start gap-4">
+                {qr ? (
+                  <img src={qr} alt="QR" className="w-36 h-36 rounded-xl border-2 border-green-300 flex-shrink-0" />
+                ) : (
+                  <div className="w-36 h-36 bg-gray-100 rounded-xl flex items-center justify-center flex-shrink-0">
+                    <Loader2 className="w-6 h-6 animate-spin text-gray-400" />
+                  </div>
+                )}
+                <div className="space-y-2 text-sm text-green-800">
+                  <p><strong>Step 1:</strong> Open your phone camera</p>
+                  <p><strong>Step 2:</strong> Point at the QR code</p>
+                  <p><strong>Step 3:</strong> Tap the link that appears</p>
+                  <p><strong>Step 4:</strong> Allow camera → scan student cards</p>
+                </div>
+              </div>
+              <div className="bg-white rounded-lg border border-green-200 px-3 py-2 flex items-center gap-2">
+                <code className="flex-1 text-xs text-gray-700 font-mono break-all">{url}</code>
+                <button onClick={() => copy(url)} className="text-green-600 hover:text-green-800 flex-shrink-0"><Copy className="w-4 h-4" /></button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div className="border border-amber-200 bg-amber-50 rounded-xl p-3 flex gap-2">
+                <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+                <p className="text-xs text-amber-700">
+                  <strong>Tunnel not running.</strong> Phone must be on the same Wi-Fi as this PC.
+                  To use from any network, run <code className="bg-white px-1 rounded">python start_tunnel.py</code>.
+                </p>
+              </div>
+              <div className="border-2 border-gray-200 rounded-xl p-4 space-y-3">
+                <p className="font-semibold text-gray-800">📶 Same Wi-Fi</p>
+                <div className="flex items-start gap-4">
+                  {qr ? (
+                    <img src={qr} alt="QR" className="w-32 h-32 rounded-xl border flex-shrink-0" />
+                  ) : (
+                    <div className="w-32 h-32 bg-gray-100 rounded-xl flex items-center justify-center flex-shrink-0">
+                      <Loader2 className="w-6 h-6 animate-spin text-gray-400" />
+                    </div>
+                  )}
+                  <div className="space-y-2 text-sm text-gray-700">
+                    <p><strong>Step 1:</strong> Connect phone to <strong>same Wi-Fi</strong> as this PC</p>
+                    <p><strong>Step 2:</strong> Scan the QR code with camera</p>
+                    <p><strong>Step 3:</strong> Allow camera → scan student cards</p>
+                  </div>
+                </div>
+                <div className="bg-gray-50 rounded-lg border px-3 py-2 flex items-center gap-2">
+                  <code className="flex-1 text-xs text-gray-700 font-mono break-all">{url}</code>
+                  <button onClick={() => copy(url)} className="text-blue-600 hover:text-blue-800 flex-shrink-0"><Copy className="w-4 h-4" /></button>
+                </div>
+              </div>
+              <div className="border border-blue-200 bg-blue-50 rounded-xl p-3">
+                <p className="text-xs font-semibold text-blue-800 mb-1 flex items-center gap-1">
+                  <CloudLightning className="w-3.5 h-3.5" /> Use from any network (recommended)
+                </p>
+                <p className="text-xs text-blue-700 mb-2">
+                  1. Download <strong>cloudflared.exe</strong> → put in <code className="bg-white px-1 rounded">backend/</code> folder<br/>
+                  2. Run <code className="bg-white px-1 rounded font-mono">python start_tunnel.py</code> instead of <code className="bg-white px-1 rounded font-mono">app.py</code>
+                </p>
+                <a href="https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/"
+                  target="_blank" className="inline-flex items-center gap-1 text-xs bg-blue-600 text-white px-3 py-1.5 rounded-lg hover:bg-blue-700">
+                  <ExternalLink className="w-3 h-3" /> Download cloudflared
+                </a>
+              </div>
+            </div>
+          )}
 
           <Button onClick={onClose} className="w-full">Done</Button>
         </div>
@@ -144,29 +141,26 @@ function SetupModal({ url, qr, onClose }: { url: string; qr: string; onClose: ()
   )
 }
 
-// ── Single session card ───────────────────────────────────────────
-function SessionCard({
-  session, colorIdx, onEnd,
-}: {
+function SessionCard({ session, colorIdx, onEnd }: {
   session: LiveSession; colorIdx: number; onEnd: (id: number) => void
 }) {
-  const col     = COLORS[colorIdx % COLORS.length]
-  const info    = session.info
+  const col  = COLORS[colorIdx % COLORS.length]
+  const info = session.info
   const { toast } = useToast()
-  const [ending, setEnding]       = useState(false)
-  const [showSetup, setShowSetup] = useState(false)
+  const [ending, setEnding]         = useState(false)
+  const [showSetup, setShowSetup]   = useState(false)
   const [manualCode, setManualCode] = useState("")
-  const [scanning, setScanning]   = useState(false)
+  const [scanning, setScanning]     = useState(false)
+  const isTunnel = session.scannerUrl.includes("trycloudflare.com")
 
   const handleEnd = async () => {
     if (!confirm(`End session for "${info.batch}"? Unscanned students will be marked Absent.`)) return
     setEnding(true)
     try {
-      await axios.post(`${API}/attendance/session/${info.session_id}/end`)
+      await fetch(`${API}/attendance/session/${info.session_id}/end`, { method: "POST" }).then(r => r.json())
       onEnd(info.session_id)
-    } catch(e: any) {
-      alert(e.response?.data?.error || "Could not end session")
-    } finally { setEnding(false) }
+    } catch { alert("Could not end session") }
+    finally { setEnding(false) }
   }
 
   const handleManualScan = async () => {
@@ -174,22 +168,21 @@ function SessionCard({
     if (!code) return
     setScanning(true)
     try {
-      await axios.post(`${API}/api/scan/${info.session_id}`, { barcode: code })
+      await fetch(`${API}/api/scan/${info.session_id}`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ barcode: code })
+      }).then(r => r.json())
       setManualCode("")
-    } catch(e: any) {
-      const msg = e.response?.data?.error || "Scan failed"
-      toast({ variant: "destructive", title: msg })
-    } finally { setScanning(false) }
+    } catch { toast({ variant: "destructive", title: "Scan failed" }) }
+    finally { setScanning(false) }
   }
 
   const exportCSV = () => {
     if (!session.scans.length) return
     const rows = [["Name","Roll","Status","Time"],
-      ...session.scans.filter(s=>s.ok).map(s=>[
-        s.student_name||"", s.roll_number||"", s.status||"", s.scanned_at||""
-      ])]
+      ...session.scans.filter(s => s.ok).map(s => [s.student_name||"", s.roll_number||"", s.status||"", s.scanned_at||""])]
     const a = document.createElement("a")
-    a.href = "data:text/csv;charset=utf-8," + encodeURIComponent(rows.map(r=>r.join(",")).join("\n"))
+    a.href = "data:text/csv;charset=utf-8," + encodeURIComponent(rows.map(r => r.join(",")).join("\n"))
     a.download = `${info.batch.replace(/\s+/g,"-")}_${info.session_id}.csv`
     a.click()
   }
@@ -198,11 +191,8 @@ function SessionCard({
 
   return (
     <>
-      {showSetup && (
-        <SetupModal url={session.webhookUrl} qr={session.qrImg} onClose={() => setShowSetup(false)} />
-      )}
+      {showSetup && <SetupModal url={session.scannerUrl} qr={session.qrImg} isTunnel={isTunnel} tunnelUrl={session.scannerUrl} onClose={() => setShowSetup(false)} />}
       <Card className={cn("border-2 transition-all", col.ring)}>
-        {/* Header */}
         <CardHeader className={cn("pb-3", col.bg)}>
           <div className="flex items-start justify-between gap-2 flex-wrap">
             <div>
@@ -224,31 +214,26 @@ function SessionCard({
         </CardHeader>
 
         <CardContent className="pt-4 space-y-4">
-          {/* Webhook URL + Setup button */}
           <div className="bg-gray-50 rounded-xl p-3 space-y-2">
             <div className="flex items-center justify-between">
-              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Webhook URL</p>
+              <div className="flex items-center gap-1.5">
+                {isTunnel
+                  ? <><CloudLightning className="w-3.5 h-3.5 text-green-600" /><p className="text-xs font-semibold text-green-700">Tunnel — works anywhere</p></>
+                  : <><Wifi className="w-3.5 h-3.5 text-amber-500" /><p className="text-xs font-semibold text-amber-600">Same Wi-Fi only</p></>
+                }
+              </div>
               <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5" onClick={() => setShowSetup(true)}>
-                <Smartphone className="w-3.5 h-3.5" /> Setup Phone App
+                <Smartphone className="w-3.5 h-3.5" /> Open on Phone
               </Button>
             </div>
             <div className="flex items-center gap-2">
-              <code className="flex-1 text-[11px] font-mono text-gray-600 bg-white border rounded-lg px-2 py-1.5 break-all">
-                {session.webhookUrl}
-              </code>
-              <button
-                onClick={() => { navigator.clipboard.writeText(session.webhookUrl); }}
-                className="flex-shrink-0 text-gray-400 hover:text-gray-700 p-1">
+              <code className="flex-1 text-[11px] font-mono text-gray-600 bg-white border rounded-lg px-2 py-1.5 break-all">{session.scannerUrl}</code>
+              <button onClick={() => navigator.clipboard.writeText(session.scannerUrl)} className="flex-shrink-0 text-gray-400 hover:text-gray-700 p-1">
                 <Copy className="w-4 h-4" />
               </button>
             </div>
-            <p className="text-[10px] text-gray-400 flex items-center gap-1">
-              <Info className="w-3 h-3" />
-              Send POST with <code className="bg-white px-1 rounded">{`{"barcode":"CODE"}`}</code> — or GET to <code className="bg-white px-1 rounded">{session.webhookUrl}/CODE</code>
-            </p>
           </div>
 
-          {/* Last scan result */}
           {last ? (
             last.ok ? (
               <div className={cn("rounded-xl p-3 flex items-center gap-3 text-sm",
@@ -259,9 +244,7 @@ function SessionCard({
                 </div>
                 <div>
                   <p className="font-semibold">{last.student_name}</p>
-                  <p className={cn("text-xs", last.status === "Late" ? "text-yellow-600" : "text-green-600")}>
-                    {last.status} · {last.roll_number} · {last.scanned_at}
-                  </p>
+                  <p className={cn("text-xs", last.status === "Late" ? "text-yellow-600" : "text-green-600")}>{last.status} · {last.roll_number} · {last.scanned_at}</p>
                 </div>
               </div>
             ) : (
@@ -277,12 +260,10 @@ function SessionCard({
             )
           ) : (
             <div className="flex flex-col items-center justify-center py-5 text-gray-300 gap-1.5 bg-gray-50 rounded-xl border-2 border-dashed">
-              <Smartphone className="w-7 h-7" />
-              <p className="text-xs">Waiting for first scan from phone app…</p>
+              <Smartphone className="w-7 h-7" /><p className="text-xs">Waiting for first scan…</p>
             </div>
           )}
 
-          {/* Scan log */}
           {session.scans.length > 0 && (
             <div className="space-y-1 max-h-32 overflow-y-auto">
               {session.scans.slice(0, 10).map((s, i) => (
@@ -297,31 +278,24 @@ function SessionCard({
             </div>
           )}
 
-          {/* Manual input fallback */}
           <div className="border-t pt-3">
             <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2 flex items-center gap-1.5">
               <Keyboard className="w-3.5 h-3.5" /> Manual Entry (fallback)
             </p>
             <div className="flex gap-2">
-              <Input
-                placeholder="Type or paste barcode ID…"
-                value={manualCode}
+              <Input placeholder="Type or paste QR code value…" value={manualCode}
                 onChange={e => setManualCode(e.target.value)}
                 onKeyDown={e => e.key === "Enter" && handleManualScan()}
-                className="h-9 font-mono text-sm"
-              />
+                className="h-9 font-mono text-sm" />
               <Button size="sm" className="h-9 px-4 flex-shrink-0" onClick={handleManualScan} disabled={scanning || !manualCode.trim()}>
                 {scanning ? <Loader2 className="w-4 h-4 animate-spin" /> : "Scan"}
               </Button>
             </div>
-            <p className="text-[10px] text-gray-400 mt-1">Press Enter or click Scan to submit a barcode manually</p>
           </div>
 
-          {/* Actions */}
           <div className="flex gap-2 pt-1 border-t">
             <Button variant="destructive" size="sm" className="gap-1.5" onClick={handleEnd} disabled={ending}>
-              {ending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Square className="w-3.5 h-3.5" />}
-              End Session
+              {ending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Square className="w-3.5 h-3.5" />} End Session
             </Button>
             <Button variant="outline" size="sm" className="gap-1.5" onClick={exportCSV} disabled={!session.scans.length}>
               <Download className="w-3.5 h-3.5" /> Export CSV
@@ -333,91 +307,103 @@ function SessionCard({
   )
 }
 
-// ── Main page ─────────────────────────────────────────────────────
 export default function BarcodeScannerPage() {
-  const [batches,  setBatches]  = useState<Batch[]>([])
-  const [sessions, setSessions] = useState<Map<number, LiveSession>>(new Map())
-  const [wsConn,   setWsConn]   = useState(false)
-  const [newBatch, setNewBatch] = useState("none")
-  const [newCourse,setNewCourse]= useState("")
-  const [lateAfter,setLateAfter]= useState("15")
-  const [starting, setStarting] = useState(false)
+  const [batches,      setBatches]      = useState<Batch[]>([])
+  const [sessions,     setSessions]     = useState<Map<number, LiveSession>>(new Map())
+  const [wsConn,       setWsConn]       = useState(false)
+  const [newBatch,     setNewBatch]     = useState("none")
+  const [newCourse,    setNewCourse]    = useState("")
+  const [lateAfter,    setLateAfter]    = useState("15")
+  const [starting,     setStarting]     = useState(false)
+  const [tunnelUrl,    setTunnelUrl]    = useState<string | null>(null)
+  const [tunnelActive, setTunnelActive] = useState(false)
 
   const socketRef   = useRef<Socket | null>(null)
   const flashTimers = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map())
   const { toast }   = useToast()
 
-  // Load batches + restore active sessions
+  // Poll for tunnel URL every 10s
   useEffect(() => {
-    axios.get(`${API}/batches/`).then(r => setBatches(r.data)).catch(() => {})
-    axios.get(`${API}/attendance/sessions/active`).then(r => {
-      r.data.forEach((s: SessionInfo) => loadSession(s))
+    const checkTunnel = async () => {
+      try {
+        const r = await fetch(`${API}/api/tunnel-url`).then(r => r.json())
+        if (r.active && r.url) { setTunnelUrl(r.url); setTunnelActive(true) }
+        else { setTunnelActive(false) }
+      } catch {}
+    }
+    checkTunnel()
+    const iv = setInterval(checkTunnel, 10000)
+    return () => clearInterval(iv)
+  }, [])
+
+  useEffect(() => {
+    fetch(`${API}/batches/`).then(r => r.json()).then(d => setBatches(Array.isArray(d) ? d : (d.data ?? []))).catch(() => {})
+    fetch(`${API}/attendance/sessions/active`).then(r => r.json()).then(data => {
+      const list = data.sessions || data || []
+      list.forEach((s: SessionInfo) => loadSession(s))
     }).catch(() => {})
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // WebSocket
   useEffect(() => {
-    const socket = io(WS, { transports: ["websocket", "polling"] })
-    socketRef.current = socket
-    socket.on("connect",    () => setWsConn(true))
-    socket.on("disconnect", () => setWsConn(false))
-
-    socket.on("scan_event", (data: ScanEvent) => {
-      const sid = data.session_id
-      if (!sid) return
-      // Clear flash timer
-      const t = flashTimers.current.get(sid)
-      if (t) clearTimeout(t)
-      const newTimer = setTimeout(() => {
-        setSessions(p => {
-          const m = new Map(p); const ss = m.get(sid)
-          if (ss) m.set(sid, { ...ss, lastScan: null })
-          return m
+    let socket: any = null
+    import("socket.io-client").then(({ io }) => {
+      socket = io(WS, { transports: ["websocket", "polling"] })
+      socketRef.current = socket
+      socket.on("connect",    () => setWsConn(true))
+      socket.on("disconnect", () => setWsConn(false))
+      socket.on("scan_event", (data: ScanEvent) => {
+        const sid = data.session_id
+        if (!sid) return
+        const t = flashTimers.current.get(sid)
+        if (t) clearTimeout(t)
+        flashTimers.current.set(sid, setTimeout(() => {
+          setSessions(p => { const m = new Map(p); const ss = m.get(sid); if (ss) m.set(sid, { ...ss, lastScan: null }); return m })
+        }, 4000))
+        setSessions(prev => {
+          const next = new Map(prev); const s = next.get(sid)
+          if (!s) return prev
+          const newScans = data.ok ? [data, ...s.scans.slice(0, 99)] : s.scans
+          const newInfo  = data.ok ? { ...s.info, scan_count: s.info.scan_count + 1,
+            present: s.info.present + (data.status !== "Late" ? 1 : 0),
+            late:    s.info.late    + (data.status === "Late" ? 1 : 0),
+          } : s.info
+          next.set(sid, { ...s, lastScan: data, scans: newScans, info: newInfo })
+          return next
         })
-      }, 4000)
-      flashTimers.current.set(sid, newTimer)
-
-      setSessions(prev => {
-        const next = new Map(prev); const s = next.get(sid)
-        if (!s) return prev
-        const newScans = data.ok ? [data, ...s.scans.slice(0, 99)] : s.scans
-        const newInfo  = data.ok ? {
-          ...s.info, scan_count: s.info.scan_count + 1,
-          present: s.info.present + (data.status !== "Late" ? 1 : 0),
-          late:    s.info.late    + (data.status === "Late" ? 1 : 0),
-        } : s.info
-        next.set(sid, { ...s, lastScan: data, scans: newScans, info: newInfo })
-        return next
       })
-    })
-
-    socket.on("scanner_joined", (d: { session_id: number }) => {
-      setSessions(prev => {
-        const next = new Map(prev); const s = next.get(d.session_id)
-        if (s) next.set(d.session_id, { ...s, scannerCount: s.scannerCount + 1 })
-        return next
-      })
-    })
-
-    return () => { socket.disconnect() }
+    }).catch(() => {})
+    return () => { if (socket) socket.disconnect() }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const loadSession = useCallback(async (info: SessionInfo) => {
-    // Get webhook URL + QR for this session
-    let webhookUrl = `${API}/api/scan/${info.session_id}`
+    // Get fresh tunnel status
+    let activeTunnel: string | null = null
+    try {
+      const tr = await fetch(`${API}/api/tunnel-url`).then(r => r.json())
+      if (tr.active && tr.url) activeTunnel = tr.url
+    } catch {}
+
+    // Build scanner URL — tunnel gets priority
+    let scannerUrl: string
+    if (activeTunnel) {
+      scannerUrl = `${activeTunnel}/mobile-scan/${info.session_id}`
+    } else {
+      const hostname = typeof window !== "undefined" ? window.location.hostname : "localhost"
+      scannerUrl = `http://${hostname}:5000/mobile-scan/${info.session_id}`
+    }
+
+    // Generate QR
     let qrImg = ""
     try {
-      const r = await axios.get(`${API}/api/session/${info.session_id}/qr`)
-      webhookUrl = r.data.webhook_url || webhookUrl
-      qrImg      = r.data.qr || ""
-    } catch { /* use default */ }
+      const { default: QRCodeLib } = await import("qrcode")
+      qrImg = await QRCodeLib.toDataURL(scannerUrl, { width: 220, margin: 1, color: { dark: "#000", light: "#fff" } })
+    } catch {}
 
-    const ls: LiveSession = {
-      info, scans: [], lastScan: null, webhookUrl, qrImg, scannerCount: 0,
-    }
-    setSessions(prev => new Map(prev).set(info.session_id, ls))
+    setSessions(prev => new Map(prev).set(info.session_id, {
+      info, scans: [], lastScan: null, scannerUrl, qrImg, scannerCount: 0,
+    }))
     if (socketRef.current?.connected) {
       socketRef.current.emit("join_session", { session_id: info.session_id })
     }
@@ -427,26 +413,27 @@ export default function BarcodeScannerPage() {
     const batchId = newBatch === "none" ? null : parseInt(newBatch)
     const running = Array.from(sessions.values()).find(s => s.info.batch_id === batchId)
     if (running) {
-      toast({ variant:"destructive", title:"Already running", description:`Session #${running.info.session_id} is live for this batch.` })
+      toast({ variant:"destructive", title:"Already running", description:`Session #${running.info.session_id} is live.` })
       return
     }
     setStarting(true)
     try {
-      const r = await axios.post(`${API}/attendance/session/start`, {
-        batch_id: batchId, course: newCourse.trim(), late_after: parseInt(lateAfter),
-      })
+      const r = await fetch(`${API}/attendance/session/start`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ batch_id: batchId, course: newCourse.trim(), late_after: parseInt(lateAfter) })
+      }).then(res => res.json())
       const info: SessionInfo = {
-        session_id: r.data.session_id, batch_id: batchId,
-        batch:      r.data.batch || "All Students",
-        course:     newCourse.trim(),
+        session_id: r.session_id, batch_id: batchId,
+        batch: r.batch || r.data?.batch || "All Students",
+        course: newCourse.trim(),
         started_at: new Date().toLocaleTimeString([], { hour:"2-digit", minute:"2-digit" }),
         scan_count: 0, present: 0, late: 0, is_active: true,
       }
       await loadSession(info)
       setNewBatch("none"); setNewCourse("")
-      toast({ title:`✅ Session started — ${info.batch}`, description:"Set up the phone app using the webhook URL." })
-    } catch(e: any) {
-      toast({ variant:"destructive", title:"Error", description: e.response?.data?.error || "Could not start." })
+      toast({ title:`✅ Session started — ${info.batch}` })
+    } catch {
+      toast({ variant:"destructive", title:"Error", description:"Could not start session." })
     } finally { setStarting(false) }
   }
 
@@ -459,31 +446,48 @@ export default function BarcodeScannerPage() {
   return (
     <DashboardLayout>
       <div className="space-y-6">
-        {/* Header */}
         <div className="flex items-start justify-between flex-wrap gap-3">
           <div>
-            <h1 className="text-2xl font-bold">Barcode Attendance</h1>
-            <p className="text-sm text-gray-500 mt-0.5">Multiple live sessions · Uses Barcode to PC app on phone</p>
+            <h1 className="text-2xl font-bold">QR Code Attendance</h1>
+            <p className="text-sm text-gray-500 mt-0.5">Start a session · phone scans student QR cards · attendance marked live</p>
           </div>
-          <div className={cn("flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full",
-            wsConn ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600")}>
-            {wsConn ? <Wifi className="w-3.5 h-3.5" /> : <WifiOff className="w-3.5 h-3.5" />}
-            {wsConn ? "Live" : "Offline"}
-          </div>
-        </div>
-
-        {/* How it works banner */}
-        <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 flex gap-3 items-start text-sm">
-          <Smartphone className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
-          <div>
-            <p className="font-semibold text-blue-800">How to scan with your phone</p>
-            <p className="text-blue-600 text-xs mt-0.5">
-              Install <strong>Barcode to PC</strong> (free, Android/iOS) → start a session below → click <strong>Setup Phone App</strong> inside the session card → follow the 3-step instructions to connect your phone. No Wi-Fi sharing needed — works over internet too.
-            </p>
+          <div className="flex items-center gap-2">
+            <div className={cn("flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full",
+              tunnelActive ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700")}>
+              <CloudLightning className="w-3.5 h-3.5" />
+              {tunnelActive ? "Tunnel Active" : "Local only"}
+            </div>
+            <div className={cn("flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full",
+              wsConn ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600")}>
+              {wsConn ? <Wifi className="w-3.5 h-3.5" /> : <WifiOff className="w-3.5 h-3.5" />}
+              {wsConn ? "Live" : "Offline"}
+            </div>
           </div>
         </div>
 
-        {/* Start new session */}
+        {tunnelActive ? (
+          <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-3 flex gap-3 items-start text-sm">
+            <CloudLightning className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="font-semibold text-green-800">Cloudflare Tunnel is running 🎉  — phone works on any network!</p>
+              <p className="text-green-600 text-xs mt-0.5 font-mono">{tunnelUrl}</p>
+            </div>
+          </div>
+        ) : (
+          <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex gap-3 items-start text-sm">
+            <AlertCircle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="font-semibold text-amber-800">Local mode — phone must be on the same Wi-Fi as this PC</p>
+              <p className="text-amber-700 text-xs mt-0.5">
+                For any-network scanning: put <strong>cloudflared.exe</strong> in <code className="bg-white/70 px-1 rounded">backend/</code> folder, then run{" "}
+                <code className="bg-white/70 px-1 rounded font-mono">python start_tunnel.py</code> instead of <code className="bg-white/70 px-1 rounded font-mono">app.py</code>.{" "}
+                <a href="https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/"
+                  target="_blank" className="underline text-amber-800">Download cloudflared →</a>
+              </p>
+            </div>
+          </div>
+        )}
+
         <Card className="border-dashed border-2 border-[#F16265]/40">
           <CardHeader className="pb-3">
             <CardTitle className="text-sm font-semibold text-[#F16265] flex items-center gap-2">
@@ -495,41 +499,32 @@ export default function BarcodeScannerPage() {
               <div className="space-y-1.5">
                 <Label className="text-xs">Batch *</Label>
                 <Select value={newBatch} onValueChange={setNewBatch}>
-                  <SelectTrigger className="h-9">
-                    <SelectValue placeholder="Select batch" />
-                  </SelectTrigger>
+                  <SelectTrigger className="h-9"><SelectValue placeholder="Select batch" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="none">All Students</SelectItem>
                     {batches.map(b => {
                       const busy = Array.from(sessions.values()).some(s => s.info.batch_id === b.id)
-                      return (
-                        <SelectItem key={b.id} value={String(b.id)} disabled={busy}>
-                          {b.name}{busy ? " 🔴" : ""}
-                        </SelectItem>
-                      )
+                      return <SelectItem key={b.id} value={String(b.id)} disabled={busy}>{b.name}{busy ? " 🔴" : ""}</SelectItem>
                     })}
                   </SelectContent>
                 </Select>
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs">Course / Subject</Label>
-                <Input placeholder="e.g. Physics…" value={newCourse} onChange={e=>setNewCourse(e.target.value)} className="h-9" />
+                <Input placeholder="e.g. Physics…" value={newCourse} onChange={e => setNewCourse(e.target.value)} className="h-9" />
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs">Late after (mins)</Label>
-                <Input type="number" value={lateAfter} onChange={e=>setLateAfter(e.target.value)} className="h-9" min={1} />
+                <Input type="number" value={lateAfter} onChange={e => setLateAfter(e.target.value)} className="h-9" min={1} />
               </div>
-              <Button onClick={startSession} disabled={starting}
-                className="h-9 bg-[#F16265] hover:bg-[#D94F52] text-white gap-2">
+              <Button onClick={startSession} disabled={starting} className="h-9 bg-[#F16265] hover:bg-[#D94F52] text-white gap-2">
                 {starting ? <><Loader2 className="w-4 h-4 animate-spin"/>Starting…</> : <><Play className="w-4 h-4"/>Start Session</>}
               </Button>
             </div>
             {activeSessions.length > 0 && (
               <div className="mt-3 flex items-center gap-2 text-xs text-gray-500">
                 <div className="flex gap-1">
-                  {activeSessions.map((_,i) => (
-                    <span key={i} className={cn("w-2.5 h-2.5 rounded-full animate-pulse", COLORS[i % COLORS.length].dot)} />
-                  ))}
+                  {activeSessions.map((_, i) => <span key={i} className={cn("w-2.5 h-2.5 rounded-full animate-pulse", COLORS[i % COLORS.length].dot)} />)}
                 </div>
                 {activeSessions.length} session{activeSessions.length !== 1 ? "s" : ""} running
               </div>
@@ -537,7 +532,6 @@ export default function BarcodeScannerPage() {
           </CardContent>
         </Card>
 
-        {/* Empty state */}
         {activeSessions.length === 0 && (
           <div className="flex flex-col items-center justify-center py-16 gap-3 text-gray-300">
             <div className="w-20 h-20 rounded-3xl bg-gray-100 flex items-center justify-center">
@@ -550,7 +544,6 @@ export default function BarcodeScannerPage() {
           </div>
         )}
 
-        {/* Session cards */}
         {activeSessions.length > 0 && (
           <div className={cn("grid gap-5", activeSessions.length === 1 ? "grid-cols-1 max-w-2xl" : "grid-cols-1 xl:grid-cols-2")}>
             {activeSessions.map((session, idx) => (

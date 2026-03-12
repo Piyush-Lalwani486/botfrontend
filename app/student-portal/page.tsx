@@ -7,7 +7,7 @@ import {
   ChevronDown, Copy, Check, User, Menu, X,
 } from "lucide-react"
 
-const API = "http://127.0.0.1:5000"
+const API = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:5000"
 
 const EXAMS = [
   { id:"jee",label:"JEE" },{ id:"neet",label:"NEET" },{ id:"cbse",label:"CBSE" },
@@ -24,7 +24,7 @@ const QUICK_PROMPTS = [
 
 interface Student {
   roll:string; name:string; batch:string; class:string; attendance:string
-  status:string; subject_type:string; joining:string
+  status:string; subject_type:string; joining:string; att_2023?:string
   phy_2024:string[]; chem_2024:string[]; math_bio_2024:string[]
   phy_2023:string[]; chem_2023:string[]; math_bio_2023:string[]
 }
@@ -116,7 +116,7 @@ export default function StudentPortalPage() {
         method:"POST", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({
           messages: newMsgs.map(m=>({ role:m.role, content:m.content })),
-          exam, session_key:`student_${student.roll}`,
+          exam, role: "student", session_key:`student_${student.roll}`,
           system_extra: systemContext,
         })
       })

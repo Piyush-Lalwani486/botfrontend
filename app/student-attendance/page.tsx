@@ -12,7 +12,6 @@ import { cn } from "@/lib/utils"
 import { useToast } from "@/hooks/use-toast"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import axios from "axios"
 
 const API = "http://127.0.0.1:5000"
 
@@ -21,42 +20,52 @@ interface Batch { id: number; name: string }
 interface AttendanceRecord { [studentId: number]: string }
 
 export default function StudentAttendancePage() {
-  const [date, setDate]             = useState<Date>(new Date())
-  const [selectedClass, setSelectedClass] = useState("all")
-  const [selectedBatch, setSelectedBatch] = useState("all")
+  const [date, setDate]                       = useState<Date>(new Date())
+  const [selectedClass, setSelectedClass]     = useState("all")
+  const [selectedBatch, setSelectedBatch]     = useState("all")
   const [enrollmentStatus, setEnrollmentStatus] = useState("enrolled")
-  const [isSaving, setIsSaving]     = useState(false)
+  const [isSaving, setIsSaving]               = useState(false)
   const { toast } = useToast()
   const router = useRouter()
-  const [students, setStudents]     = useState<Student[]>([])
-  const [batches, setBatches]       = useState<Batch[]>([])
-  const [courses, setCourses]       = useState<string[]>([])
+  const [students, setStudents]   = useState<Student[]>([])
+  const [batches, setBatches]     = useState<Batch[]>([])
+  const [courses, setCourses]     = useState<string[]>([])
   const [attendance, setAttendance] = useState<AttendanceRecord>({})
-  const [isLoading, setIsLoading]   = useState(true)
+  const [isLoading, setIsLoading] = useState(true)
 
   useEffect(() => {
     const load = async () => {
       try {
         setIsLoading(true)
         const [sRes, bRes, cRes] = await Promise.all([
-          axios.get<Student[]>(`${API}/students/`),
-          axios.get<Batch[]>(`${API}/batches/`),
-          axios.get(`${API}/courses/`),
+          fetch(`${API}/students/`).then(r => r.json()),
+          fetch(`${API}/batches/`).then(r => r.json()),
+          fetch(`${API}/courses/`).then(r => r.json()),
         ])
-        setStudents(sRes.data)
-        setBatches(bRes.data)
-        setCourses(cRes.data.map((c: any) => c.name))
+        const studentList: Student[] = Array.isArray(sRes) ? sRes : (sRes.data ?? [])
+        const batchList: Batch[]     = Array.isArray(bRes) ? bRes : (bRes.data ?? [])
+        const courseList             = Array.isArray(cRes) ? cRes : (cRes.data ?? [])
+        setStudents(studentList)
+        setBatches(batchList)
+        setCourses(courseList.map((c: any) => c.name))
         const init: AttendanceRecord = {}
-        sRes.data.forEach((s: Student) => { init[s.id] = "Present" })
+        studentList.forEach((s: Student) => { init[s.id] = "Present" })
         setAttendance(init)
-      } catch { toast({ variant:"destructive", title:"Error", description:"Failed to load data." }) }
+      } catch { toast({ variant: "destructive", title: "Error", description: "Failed to load data." }) }
       finally { setIsLoading(false) }
     }
     load()
-  }, [])
+  }, []) // eslint-disable-line
 
   const handleStatusChange = (studentId: number, status: string) =>
     setAttendance(prev => ({ ...prev, [studentId]: status }))
+
+  const filteredStudents = students.filter(student => {
+    const matchCourse = selectedClass === "all" || (student.course?.toLowerCase() || "") === selectedClass.toLowerCase()
+    const matchBatch  = selectedBatch === "all" || String(student.batch_id) === selectedBatch
+    const matchStatus = enrollmentStatus === "all" || student.status === enrollmentStatus
+    return matchCourse && matchBatch && matchStatus
+  })
 
   const markAll = (status: string) => {
     const updated: AttendanceRecord = {}
@@ -67,22 +76,19 @@ export default function StudentAttendancePage() {
   const handleSave = async () => {
     setIsSaving(true)
     try {
-      await axios.post(`${API}/attendance/save`, {
-        date:    format(date, "yyyy-MM-dd"),
-        course:  selectedClass,
-        records: filteredStudents.map(s => ({ student_id: s.id, status: attendance[s.id] || "Present" })),
-      })
-      toast({ title:"Attendance Saved", description:`Recorded for ${format(date, "MMM d, yyyy")}.` })
-    } catch { toast({ variant:"destructive", title:"Save Failed", description:"Could not save attendance." }) }
+      await fetch(`${API}/attendance/save`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          date:    format(date, "yyyy-MM-dd"),
+          course:  selectedClass,
+          records: filteredStudents.map(s => ({ student_id: s.id, status: attendance[s.id] || "Present" })),
+        })
+      }).then(r => r.json())
+      toast({ title: "Attendance Saved", description: `Recorded for ${format(date, "MMM d, yyyy")}.` })
+    } catch { toast({ variant: "destructive", title: "Save Failed", description: "Could not save attendance." }) }
     finally { setIsSaving(false) }
   }
-
-  const filteredStudents = students.filter(student => {
-    const matchCourse  = selectedClass === "all" || (student.course?.toLowerCase() || "") === selectedClass.toLowerCase()
-    const matchBatch   = selectedBatch === "all" || String(student.batch_id) === selectedBatch
-    const matchStatus  = enrollmentStatus === "all" || student.status === enrollmentStatus
-    return matchCourse && matchBatch && matchStatus
-  })
 
   const statusCounts = {
     present: filteredStudents.filter(s => attendance[s.id] === "Present").length,
@@ -108,13 +114,12 @@ export default function StudentAttendancePage() {
           </div>
         </div>
 
-        {/* Quick stats */}
         {!isLoading && filteredStudents.length > 0 && (
           <div className="grid grid-cols-3 gap-4">
             {[
-              { label:"Present", count: statusCounts.present, color:"text-green-600 bg-green-50" },
-              { label:"Absent",  count: statusCounts.absent,  color:"text-red-600 bg-red-50" },
-              { label:"Late",    count: statusCounts.late,    color:"text-yellow-600 bg-yellow-50" },
+              { label: "Present", count: statusCounts.present, color: "text-green-600 bg-green-50" },
+              { label: "Absent",  count: statusCounts.absent,  color: "text-red-600 bg-red-50" },
+              { label: "Late",    count: statusCounts.late,    color: "text-yellow-600 bg-yellow-50" },
             ].map(s => (
               <Card key={s.label} className="border-border/50">
                 <CardContent className={`pt-4 pb-3 rounded-lg ${s.color}`}>
@@ -129,7 +134,6 @@ export default function StudentAttendancePage() {
         <Card className="border-border/50">
           <CardHeader><CardTitle>Attendance Management</CardTitle></CardHeader>
           <CardContent className="space-y-6">
-            {/* Filters row */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
               <div>
                 <label className="text-sm font-medium mb-2 block">Date</label>
@@ -178,7 +182,6 @@ export default function StudentAttendancePage() {
               </div>
             </div>
 
-            {/* Mark all buttons */}
             <div className="flex gap-2 flex-wrap">
               <span className="text-sm font-medium self-center text-muted-foreground">Mark all as:</span>
               {["Present","Absent","Late","Excused"].map(s => (

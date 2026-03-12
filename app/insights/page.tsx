@@ -1,217 +1,410 @@
 "use client"
-import { useState, useRef } from "react"
+/**
+ * Data Insights — AI-powered analysis with full chat history.
+ *
+ * - Auto-loads CSVs from backend (no dummy data)
+ * - Full conversation history passed on every turn
+ * - Clickable quick questions always work (auto-picks right CSV)
+ * - Tokens capped — short context, efficient prompts
+ */
+import { useState, useRef, useEffect, useCallback } from "react"
 import { DashboardLayout } from "@/components/dashboard-layout"
-import { Upload, Send, BarChart2, Loader2 } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Upload, Send, BarChart2, Loader2, RefreshCw, Database, X, ChevronDown } from "lucide-react"
 
 const API = "http://127.0.0.1:5000"
 
 const QUICK = [
-  { icon:"💰", label:"Pending Fees",    q:"Which students have pending fee payments? List their names and amount due." },
-  { icon:"🏆", label:"Top Students",    q:"Who are the top 5 students with highest average scores?" },
-  { icon:"⚠️", label:"Needs Attention", q:"Which students are scoring below 65 average and need extra attention?" },
-  { icon:"📉", label:"Low Attendance",  q:"Which students have attendance below 80%?" },
-  { icon:"📊", label:"Batch Summary",   q:"How many students are in each batch? Show summary." },
-  { icon:"📈", label:"Most Improved",   q:"Which students have improved the most from Test 1 to the latest test?" },
-  { icon:"💸", label:"Fee Defaulters",  q:"List all students who have not paid any fees at all." },
-  { icon:"🔬", label:"Subject Toppers", q:"Who is the best student in Physics, Chemistry, and Maths/Biology separately?" },
+  { icon:"💰", label:"Pending Fees",    q:"Which students have pending fee payments? List names and exact amount due (highest first).", file:"students_data.csv" },
+  { icon:"🏆", label:"Top Scorers",     q:"Who are the top 5 students with highest average test scores? Show their scores.", file:"students_data.csv" },
+  { icon:"⚠️", label:"Needs Attention", q:"Which students have average scores below 65 and need extra attention? List them.", file:"students_data.csv" },
+  { icon:"📉", label:"Low Attendance",  q:"Which students have attendance below 80%? List names and their attendance %.", file:"students_data.csv" },
+  { icon:"📊", label:"Batch Summary",   q:"How many students are in each batch? Give a count per batch.", file:"students_data.csv" },
+  { icon:"💸", label:"Fee Defaulters",  q:"List all students who have paid zero fees or have the highest fees pending.", file:"students_data.csv" },
+  { icon:"💼", label:"Staff Salary",    q:"What is the total salary payout this month? List staff with unpaid salaries.", file:"staff_data.csv" },
+  { icon:"📦", label:"Expenses",        q:"What are the total expenses by category? Which category is highest?", file:"expenses_data.csv" },
 ]
 
-interface Answer { question:string; answer:string; analysis_type:string; timestamp:string; elapsed:number }
-interface Summary { title:string; total_records:number; data_type:string; key_stats:any[]; quick_questions:string[]; insights:string }
+interface Message {
+  role: "user" | "assistant"
+  content: string
+  timestamp?: string
+  elapsed?: number
+  analysis_type?: string
+  filename?: string
+  error?: boolean
+}
+
+interface CsvFile { filename: string; size_kb: number; rows: number }
+
+const TYPE_COLOR: Record<string, string> = {
+  financial:"#059669", scores:"#3b82f6", students:"#6366f1",
+  staff:"#7c3aed", expenses:"#dc2626", general:"#475569"
+}
+const TYPE_ICON: Record<string, string> = {
+  financial:"💰", scores:"📊", students:"👥",
+  staff:"👨‍🏫", expenses:"💸", general:"📋"
+}
 
 export default function InsightsPage() {
-  const [csvText,  setCsvText]  = useState("")
-  const [filename, setFilename] = useState("")
-  const [summary,  setSummary]  = useState<Summary|null>(null)
-  const [answers,  setAnswers]  = useState<Answer[]>([])
-  const [question, setQuestion] = useState("")
-  const [loading,  setLoading]  = useState(false)
-  const [loadingS, setLoadingS] = useState(false)
-  const [msg,      setMsg]      = useState("")
-  const fileRef = useRef<HTMLInputElement>(null)
+  const [csvFiles,   setCsvFiles]   = useState<CsvFile[]>([])
+  const [csvText,    setCsvText]    = useState("")
+  const [filename,   setFilename]   = useState("")
+  const [messages,   setMessages]   = useState<Message[]>([])
+  const [question,   setQuestion]   = useState("")
+  const [loading,    setLoading]    = useState(false)
+  const [loadingCsv, setLoadingCsv] = useState<string | null>(null)
+  const [msg,        setMsg]        = useState("")
+  const [filesOpen,  setFilesOpen]  = useState(false)
+  const fileRef   = useRef<HTMLInputElement>(null)
+  const bottomRef = useRef<HTMLDivElement>(null)
 
-  const flash = (m:string) => { setMsg(m); setTimeout(()=>setMsg(""),4000) }
+  // Load list of available CSVs from backend on mount
+  useEffect(() => {
+    fetch(`${API}/api/data/list`)
+      .then(r => r.json())
+      .then(d => setCsvFiles(d.files || []))
+      .catch(() => {})
+  }, [])
 
-  const trimCsv = (text: string, maxRows = 60) => {
-    const lines = text.trim().split("\n")
-    if (lines.length <= maxRows + 1) return text
-    return lines.slice(0, maxRows + 1).join("\n") + `\n... (${lines.length - 1} total rows)`
-  }
+  // Auto-scroll to bottom on new messages
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" })
+  }, [messages])
 
-  const processFile = async (file: File) => {
-    if (!file.name.endsWith(".csv")) { flash("⚠ Please upload a .csv file"); return }
-    const text = await file.text()
-    setCsvText(text); setFilename(file.name); setSummary(null); setAnswers([])
-    setLoadingS(true)
-    try {
-      const r = await fetch(`${API}/api/insights/summary`, {
-        method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ csv_text:trimCsv(text), filename:file.name })
-      })
-      const d = await r.json()
-      if (!d.error) setSummary(d)
-    } catch { flash("⚠ Cannot connect to server") }
-    finally { setLoadingS(false) }
-  }
+  const flash = (m: string) => { setMsg(m); setTimeout(() => setMsg(""), 4000) }
 
-  const loadDefault = async (fname: string) => {
-    setLoadingS(true)
+  const loadCsv = useCallback(async (fname: string) => {
+    setLoadingCsv(fname)
     try {
       const r = await fetch(`${API}/api/data/load/${fname}`)
       const d = await r.json()
       if (d.csv_text) {
-        setCsvText(d.csv_text); setFilename(fname); setSummary(null); setAnswers([])
-        const r2 = await fetch(`${API}/api/insights/summary`, {
-          method:"POST", headers:{"Content-Type":"application/json"},
-          body: JSON.stringify({ csv_text:d.csv_text, filename:fname })
-        })
-        const d2 = await r2.json()
-        if (!d2.error) setSummary(d2)
-        flash(`✅ Loaded ${fname}`)
-      } else flash(`⚠ ${d.error||"File not found"}`)
-    } catch { flash("⚠ Cannot connect") }
-    finally { setLoadingS(false) }
-  }
+        setCsvText(d.csv_text); setFilename(fname)
+        flash(`✅ Loaded ${fname} (${d.csv_text.split("\n").length - 1} rows)`)
+        setMessages(prev => [...prev, {
+          role: "assistant",
+          content: `📂 Loaded **${fname}**. Ask me anything about this data — fees, scores, attendance, summaries, comparisons.`,
+          timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        }])
+      } else {
+        flash(`⚠ ${d.error || "File not found"}`)
+      }
+    } catch { flash("⚠ Cannot connect to server") }
+    finally { setLoadingCsv(null) }
+  }, [])
 
-  const ask = async (q?: string) => {
-    const qText = q || question.trim()
-    if (!qText || !csvText) { flash("⚠ Upload a CSV first"); return }
-    setLoading(true)
-    const ctrl = new AbortController()
-    const tid = setTimeout(() => ctrl.abort(), 90000)
+  const handleUpload = useCallback(async (file: File) => {
+    if (!file.name.endsWith(".csv")) { flash("⚠ Please upload a .csv file"); return }
+    setLoadingCsv(file.name)
     try {
+      const text = await file.text()
+      // Save to backend data folder
+      await fetch(`${API}/api/data/save`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filename: file.name, csv_text: text })
+      })
+      setCsvText(text); setFilename(file.name)
+      // Refresh file list
+      const r2 = await fetch(`${API}/api/data/list`)
+      const d2 = await r2.json()
+      setCsvFiles(d2.files || [])
+      flash(`✅ Uploaded and saved ${file.name}`)
+      setMessages(prev => [...prev, {
+        role: "assistant",
+        content: `📂 Uploaded **${file.name}**. It's now saved on the server and will be available next time. Ask me anything about this data.`,
+        timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      }])
+    } catch { flash("⚠ Upload failed") }
+    finally { setLoadingCsv(null) }
+  }, [])
+
+  const ask = useCallback(async (qText: string, autoFile?: string) => {
+    const q = qText.trim()
+    if (!q) return
+
+    let activeCsvText = csvText
+    let activeFilename = filename
+    if (autoFile && autoFile !== filename) {
+      setLoadingCsv(autoFile)
+      try {
+        const r = await fetch(`${API}/api/data/load/${autoFile}`)
+        const d = await r.json()
+        if (d.csv_text) {
+          activeCsvText  = d.csv_text
+          activeFilename = autoFile
+          setCsvText(d.csv_text); setFilename(autoFile)
+        }
+      } catch { /* fall through, backend will auto-pick */ }
+      finally { setLoadingCsv(null) }
+    }
+
+    // Add user message to chat
+    const userMsg: Message = {
+      role: "user", content: q,
+      timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+    }
+    setMessages(prev => [...prev, userMsg])
+    setQuestion("")
+    setLoading(true)
+
+    const ctrl = new AbortController()
+    const tid  = setTimeout(() => ctrl.abort(), 90000)
+
+    try {
+      const historyForApi = messages
+        .filter(m => m.role === "user" || m.role === "assistant")
+        .filter(m => !m.content.startsWith("📂"))  // skip file-load messages
+        .slice(-10)  // last 10 turns max
+        .map(m => ({ role: m.role, content: m.content.slice(0, 500) }))
+
       const r = await fetch(`${API}/api/insights/query`, {
-        method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ question:qText, csv_text:trimCsv(csvText, 50), filename, history:answers.slice(-3) }),
-        signal: ctrl.signal
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          question:  q,
+          csv_text:  activeCsvText,
+          filename:  activeFilename,
+          history:   historyForApi,
+        }),
+        signal: ctrl.signal,
       })
       const d = await r.json()
       if (d.answer) {
-        setAnswers(prev=>[...prev,{ question:qText, answer:d.answer, analysis_type:d.analysis_type, timestamp:d.timestamp, elapsed:d.elapsed }])
-        if (!q) setQuestion("")
-      } else flash(`⚠ ${d.error}`)
-    } catch(e:any) {
-      flash(e?.name==="AbortError" ? "⚠ The AI is taking longer than usual — please try again" : "⚠ Cannot connect to backend")
+        setMessages(prev => [...prev, {
+          role: "assistant",
+          content: d.answer,
+          timestamp:     d.timestamp,
+          elapsed:       d.elapsed,
+          analysis_type: d.analysis_type,
+          filename:      d.filename,
+        }])
+      } else {
+        setMessages(prev => [...prev, {
+          role: "assistant", content: `⚠ ${d.error || "Something went wrong"}`, error: true,
+          timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        }])
+      }
+    } catch (e: any) {
+      setMessages(prev => [...prev, {
+        role: "assistant",
+        content: e?.name === "AbortError"
+          ? "⚠ The AI took too long. Please try a simpler question."
+          : "⚠ Cannot connect to the backend server.",
+        error: true,
+        timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      }])
+    } finally {
+      clearTimeout(tid)
+      setLoading(false)
     }
-    finally { clearTimeout(tid); setLoading(false) }
-  }
+  }, [csvText, filename, messages])
 
-  const TYPE_COLOR: Record<string,string> = { financial:"#059669", students:"#3b82f6", staff:"#7c3aed", expenses:"#dc2626", general:"#475569" }
-  const TYPE_ICON:  Record<string,string> = { financial:"💰", students:"👥", staff:"👨‍🏫", expenses:"💸", general:"📋" }
+  const clearChat = () => setMessages([])
 
   return (
     <DashboardLayout>
-      <div className="space-y-5">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-            <BarChart2 className="w-6 h-6 text-[#F16265]" /> Data Insights
-          </h1>
-          <p className="text-gray-500 text-sm">Upload any CSV and ask questions — AI will analyze your data</p>
-        </div>
+      <div className="flex flex-col h-[calc(100vh-80px)] gap-4">
 
-        {msg && <div className={`px-4 py-3 rounded-xl text-sm font-medium ${msg.startsWith("✅") ? "bg-green-50 text-green-700 border border-green-200" : "bg-red-50 text-red-700 border border-red-200"}`}>{msg}</div>}
-
-        {/* Upload */}
-        <div className="bg-white rounded-2xl border border-gray-100 p-5">
-          <div className="flex flex-wrap gap-3 items-center">
-            <label className="flex items-center gap-2 px-4 py-2.5 border-2 border-dashed border-gray-300 rounded-xl text-sm font-medium text-gray-600 hover:border-[#F16265] hover:text-[#F16265] cursor-pointer transition-all">
-              <Upload className="w-4 h-4" /> Upload CSV File
-              <input ref={fileRef} type="file" accept=".csv" className="hidden" onChange={e=>e.target.files?.[0] && processFile(e.target.files[0])} />
+        {/* Header */}
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <h1 className="text-2xl font-bold flex items-center gap-2">
+              <BarChart2 className="w-6 h-6 text-[#F16265]" /> Data Insights AI
+            </h1>
+            <p className="text-gray-500 text-sm mt-0.5">Ask anything about fees, scores, attendance, staff — AI reads your CSV data</p>
+          </div>
+          <div className="flex items-center gap-2">
+            {messages.length > 0 && (
+              <Button variant="outline" size="sm" onClick={clearChat} className="gap-1.5 text-xs">
+                <X className="w-3.5 h-3.5" /> Clear Chat
+              </Button>
+            )}
+            <label className="flex items-center gap-2 px-3 py-2 border border-gray-200 rounded-xl text-sm font-medium text-gray-600 hover:border-[#F16265] hover:text-[#F16265] cursor-pointer transition-all bg-white">
+              <Upload className="w-4 h-4" /> Upload CSV
+              <input ref={fileRef} type="file" accept=".csv" className="hidden"
+                onChange={e => e.target.files?.[0] && handleUpload(e.target.files[0])} />
             </label>
-            <span className="text-gray-300 text-sm">or load sample:</span>
-            {["students_data.csv","expenses_data.csv","staff_data.csv"].map(f=>(
-              <button key={f} onClick={()=>loadDefault(f)}
-                className="px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs font-medium text-gray-600 hover:border-[#F16265]/50 hover:bg-[#F16265]/5 transition-all">
-                {f}
-              </button>
-            ))}
-            {csvText && <span className="text-xs text-green-600 font-medium flex items-center gap-1">✅ {filename} loaded</span>}
           </div>
         </div>
 
-        {/* Summary */}
-        {loadingS && <div className="flex items-center gap-3 text-gray-500 text-sm py-6 justify-center"><Loader2 className="w-5 h-5 animate-spin text-[#F16265]" /> Analyzing CSV...</div>}
+        {msg && (
+          <div className={`px-4 py-2.5 rounded-xl text-sm font-medium ${msg.startsWith("✅") ? "bg-green-50 text-green-700 border border-green-200" : "bg-red-50 text-red-700 border border-red-200"}`}>
+            {msg}
+          </div>
+        )}
 
-        {summary && !loadingS && (
-          <div className="bg-white rounded-2xl border border-gray-100 p-5">
-            <div className="flex items-start justify-between mb-4">
-              <div>
-                <h3 className="font-bold text-gray-900">{summary.title}</h3>
-                <p className="text-xs text-gray-400 mt-0.5">{summary.total_records} records · {summary.data_type}</p>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
-              {summary.key_stats.map((s:any,i:number)=>(
-                <div key={i} className="bg-gray-50 rounded-xl p-3">
-                  <div className="text-xl mb-1">{s.icon}</div>
-                  <p className="font-bold text-gray-900 text-sm">{s.value}</p>
-                  <p className="text-xs text-gray-500">{s.label}</p>
+        <div className="flex gap-4 flex-1 min-h-0">
+
+          {/* Sidebar — Files + Quick Questions */}
+          <div className="w-56 flex-shrink-0 flex flex-col gap-3 hidden md:flex">
+
+            {/* Available CSVs */}
+            <div className="bg-white rounded-2xl border border-gray-100 p-3">
+              <button className="flex items-center justify-between w-full mb-2"
+                onClick={() => setFilesOpen(v => !v)}>
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1.5">
+                  <Database className="w-3.5 h-3.5" /> Data Files
+                </p>
+                <ChevronDown className={`w-3.5 h-3.5 text-gray-400 transition-transform ${filesOpen ? "rotate-180" : ""}`} />
+              </button>
+
+              {csvFiles.length === 0 ? (
+                <p className="text-xs text-gray-400 text-center py-2">No CSV files yet.<br />Upload one to get started.</p>
+              ) : (
+                <div className="space-y-1">
+                  {csvFiles.map(f => (
+                    <button key={f.filename} onClick={() => loadCsv(f.filename)}
+                      className={`w-full text-left px-2.5 py-2 rounded-lg text-xs transition-all ${
+                        filename === f.filename
+                          ? "bg-[#F16265]/10 text-[#F16265] font-semibold border border-[#F16265]/20"
+                          : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                      }`}
+                      disabled={loadingCsv === f.filename}
+                    >
+                      <div className="flex items-center gap-1.5">
+                        {loadingCsv === f.filename
+                          ? <Loader2 className="w-3 h-3 animate-spin flex-shrink-0" />
+                          : <span className="text-base">📄</span>
+                        }
+                        <span className="truncate">{f.filename}</span>
+                      </div>
+                      <p className="text-gray-400 ml-5 mt-0.5">{f.rows} rows · {f.size_kb}KB</p>
+                    </button>
+                  ))}
                 </div>
-              ))}
+              )}
+
+              <button onClick={() => fetch(`${API}/api/data/list`).then(r=>r.json()).then(d=>setCsvFiles(d.files||[]))}
+                className="mt-2 w-full flex items-center justify-center gap-1 text-xs text-gray-400 hover:text-gray-600 py-1">
+                <RefreshCw className="w-3 h-3" /> Refresh
+              </button>
             </div>
-            {summary.insights && <p className="text-sm text-gray-600 bg-blue-50 rounded-xl p-3 border border-blue-100">{summary.insights}</p>}
-            <div className="mt-4">
-              <p className="text-xs font-semibold text-gray-500 mb-2 uppercase tracking-wide">Suggested Questions:</p>
-              <div className="flex flex-wrap gap-2">
-                {summary.quick_questions?.map((q:string,i:number)=>(
-                  <button key={i} onClick={()=>ask(q)}
-                    className="px-3 py-1.5 bg-gray-50 border border-gray-200 rounded-xl text-xs text-gray-600 hover:border-[#F16265]/50 hover:bg-[#F16265]/5 transition-all text-left">
-                    {q}
+
+            {/* Quick questions */}
+            <div className="bg-white rounded-2xl border border-gray-100 p-3 flex-1 overflow-y-auto">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Quick Questions</p>
+              <div className="space-y-1.5">
+                {QUICK.map(q => (
+                  <button key={q.q}
+                    onClick={() => ask(q.q, q.file)}
+                    disabled={loading}
+                    className="w-full flex items-center gap-2 px-2.5 py-2 rounded-xl text-left hover:bg-[#F16265]/5 hover:border-[#F16265]/30 border border-transparent transition-all group disabled:opacity-50">
+                    <span className="text-base flex-shrink-0">{q.icon}</span>
+                    <span className="text-xs font-medium text-gray-700 group-hover:text-[#F16265]">{q.label}</span>
                   </button>
                 ))}
               </div>
             </div>
           </div>
-        )}
 
-        {/* Quick prompts */}
-        {csvText && (
-          <div className="bg-white rounded-2xl border border-gray-100 p-5">
-            <p className="text-xs font-semibold text-gray-500 mb-3 uppercase tracking-wide">Quick Questions</p>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              {QUICK.map(q=>(
-                <button key={q.q} onClick={()=>ask(q.q)}
-                  className="flex items-center gap-2 px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-left hover:border-[#F16265]/50 hover:bg-[#F16265]/5 transition-all group">
-                  <span className="text-lg">{q.icon}</span>
-                  <span className="text-xs font-medium text-gray-700 group-hover:text-gray-900">{q.label}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
+          {/* Main chat area */}
+          <div className="flex-1 flex flex-col min-h-0 bg-white rounded-2xl border border-gray-100 overflow-hidden">
 
-        {/* Ask */}
-        <div className="bg-white rounded-2xl border border-gray-100 p-4 flex gap-3">
-          <input value={question} onChange={e=>setQuestion(e.target.value)}
-            onKeyDown={e=>e.key==="Enter"&&ask()}
-            placeholder={csvText ? "Ask anything about your data..." : "Upload a CSV first, then ask questions"}
-            disabled={!csvText}
-            className="flex-1 border border-gray-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-[#F16265] focus:ring-1 focus:ring-[#F16265]/20 disabled:bg-gray-50 disabled:text-gray-400 transition-all" />
-          <button onClick={()=>ask()} disabled={loading||!question.trim()||!csvText}
-            className="px-4 py-2.5 bg-[#F16265] text-white rounded-xl hover:bg-[#D94F52] disabled:opacity-50 transition-colors flex items-center gap-2">
-            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-          </button>
-        </div>
-
-        {/* Answers */}
-        {answers.length > 0 && (
-          <div className="space-y-4">
-            {[...answers].reverse().map((a,i)=>(
-              <div key={i} className="bg-white rounded-2xl border border-gray-100 p-5">
-                <div className="flex items-start gap-3 mb-3">
-                  <span className="text-xl">{TYPE_ICON[a.analysis_type]||"📋"}</span>
-                  <div className="flex-1">
-                    <p className="font-semibold text-gray-900 text-sm">{a.question}</p>
-                    <p className="text-[11px] text-gray-400 mt-0.5">{a.timestamp} · {a.elapsed}s</p>
+            {/* Chat messages */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+              {messages.length === 0 && (
+                <div className="flex flex-col items-center justify-center h-full text-center gap-4 text-gray-300">
+                  <div className="w-16 h-16 rounded-2xl bg-gray-100 flex items-center justify-center">
+                    <BarChart2 className="w-8 h-8" />
+                  </div>
+                  <div>
+                    <p className="text-gray-500 font-semibold">Ask anything about your institute</p>
+                    <p className="text-sm mt-1">Select a data file from the sidebar or click a Quick Question</p>
+                    <p className="text-sm">It remembers the whole conversation — ask follow-up questions!</p>
+                  </div>
+                  {/* Mobile quick questions */}
+                  <div className="flex flex-wrap gap-2 justify-center md:hidden">
+                    {QUICK.slice(0, 4).map(q => (
+                      <button key={q.q} onClick={() => ask(q.q, q.file)}
+                        className="px-3 py-1.5 bg-gray-100 rounded-xl text-xs text-gray-600 hover:bg-[#F16265]/10 hover:text-[#F16265] transition-all">
+                        {q.icon} {q.label}
+                      </button>
+                    ))}
                   </div>
                 </div>
-                <div className="bg-gray-50 rounded-xl p-4 text-sm text-gray-800 whitespace-pre-wrap leading-relaxed border border-gray-100">
-                  {a.answer}
+              )}
+
+              {messages.map((m, i) => (
+                <div key={i} className={`flex gap-3 ${m.role === "user" ? "flex-row-reverse" : "flex-row"}`}>
+                  {/* Avatar */}
+                  <div className={`w-8 h-8 rounded-xl flex items-center justify-center text-sm flex-shrink-0 ${
+                    m.role === "user" ? "bg-[#F16265] text-white" : "bg-gray-100 text-gray-600"
+                  }`}>
+                    {m.role === "user" ? "👤" : TYPE_ICON[m.analysis_type||""] || "🤖"}
+                  </div>
+
+                  {/* Bubble */}
+                  <div className={`max-w-[78%] ${m.role === "user" ? "items-end" : "items-start"} flex flex-col gap-1`}>
+                    <div className={`px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${
+                      m.role === "user"
+                        ? "bg-[#F16265] text-white rounded-tr-sm"
+                        : m.error
+                          ? "bg-red-50 border border-red-200 text-red-700 rounded-tl-sm"
+                          : "bg-gray-50 border border-gray-100 text-gray-800 rounded-tl-sm"
+                    }`}>
+                      {m.content}
+                    </div>
+                    <div className="flex items-center gap-2 px-1">
+                      {m.timestamp && <span className="text-[10px] text-gray-400">{m.timestamp}</span>}
+                      {m.elapsed && <span className="text-[10px] text-gray-400">{m.elapsed}s</span>}
+                      {m.filename && m.role === "assistant" && (
+                        <span className="text-[10px] text-gray-400">📄 {m.filename}</span>
+                      )}
+                    </div>
+                  </div>
                 </div>
+              ))}
+
+              {loading && (
+                <div className="flex gap-3">
+                  <div className="w-8 h-8 rounded-xl bg-gray-100 flex items-center justify-center text-sm flex-shrink-0">🤖</div>
+                  <div className="bg-gray-50 border border-gray-100 rounded-2xl rounded-tl-sm px-4 py-3 flex items-center gap-2">
+                    <Loader2 className="w-4 h-4 animate-spin text-[#F16265]" />
+                    <span className="text-sm text-gray-500">Analyzing data…</span>
+                  </div>
+                </div>
+              )}
+              <div ref={bottomRef} />
+            </div>
+
+            {/* Active file indicator */}
+            {filename && (
+              <div className="px-4 py-2 bg-blue-50 border-t border-blue-100 flex items-center justify-between">
+                <span className="text-xs text-blue-600 flex items-center gap-1.5">
+                  <Database className="w-3.5 h-3.5" />
+                  Active: <strong>{filename}</strong>
+                </span>
+                <button onClick={() => { setCsvText(""); setFilename("") }}
+                  className="text-xs text-blue-400 hover:text-blue-600 flex items-center gap-1">
+                  <X className="w-3 h-3" /> Unload
+                </button>
               </div>
-            ))}
+            )}
+
+            {/* Input */}
+            <div className="p-3 border-t border-gray-100">
+              <div className="flex gap-2">
+                <Input
+                  value={question}
+                  onChange={e => setQuestion(e.target.value)}
+                  onKeyDown={e => e.key === "Enter" && !loading && ask(question)}
+                  placeholder={filename ? `Ask about ${filename}…` : "Select a file or ask a question…"}
+                  className="flex-1 rounded-xl border-gray-200 focus:border-[#F16265]"
+                  disabled={loading}
+                />
+                <Button onClick={() => ask(question)} disabled={loading || !question.trim()}
+                  className="bg-[#F16265] hover:bg-[#D94F52] rounded-xl px-4">
+                  {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                </Button>
+              </div>
+              <p className="text-[10px] text-gray-400 mt-1.5 ml-1">
+                💡 Ask follow-up questions like "from the above, who has the most?" — it remembers the conversation
+              </p>
+            </div>
           </div>
-        )}
+        </div>
       </div>
     </DashboardLayout>
   )

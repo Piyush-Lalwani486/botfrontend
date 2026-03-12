@@ -7,14 +7,13 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Plus, Layers, Edit, Trash2, Loader2, X, Users, Search, Upload, FileText } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
-import axios from "axios"
 
 const API = "http://127.0.0.1:5000"
 interface Batch { id: number; name: string; description: string; schedule: string; capacity: number; student_count: number }
 
 function BatchForm({ name, onName, desc, onDesc, schedule, onSchedule, capacity, onCapacity, onSubmit, onClose, isSaving, isAdd }:
   { name:string; onName:(v:string)=>void; desc:string; onDesc:(v:string)=>void; schedule:string; onSchedule:(v:string)=>void;
-    capacity:string; onCapacity:(v:string)=>void; onSubmit:(e:any)=>void; onClose:()=>void; isSaving:boolean; isAdd:boolean }) {
+    capacity:string; onCapacity:(v:string)=>void; onSubmit:(e:React.FormEvent)=>void; onClose:()=>void; isSaving:boolean; isAdd:boolean }) {
   return (
     <form onSubmit={onSubmit} className="space-y-4">
       <div className="space-y-2"><Label>Batch Name *</Label><Input placeholder="e.g. Morning Batch A" value={name} onChange={e=>onName(e.target.value)} required /></div>
@@ -32,64 +31,81 @@ function BatchForm({ name, onName, desc, onDesc, schedule, onSchedule, capacity,
 }
 
 export default function BatchesPage() {
-  const [batches, setBatches]     = useState<Batch[]>([])
-  const [isLoading, setIsLoading] = useState(true)
-  const [search, setSearch]       = useState("")
-  const [isAddOpen, setIsAddOpen] = useState(false)
+  const [batches, setBatches]       = useState<Batch[]>([])
+  const [isLoading, setIsLoading]   = useState(true)
+  const [search, setSearch]         = useState("")
+  const [isAddOpen, setIsAddOpen]   = useState(false)
   const [isEditOpen, setIsEditOpen] = useState(false)
-  const [isSaving, setIsSaving]   = useState(false)
-  const [currentId, setCurrentId] = useState<number|null>(null)
-  const [name, setName]           = useState("")
-  const [desc, setDesc]           = useState("")
-  const [schedule, setSchedule]   = useState("")
-  const [capacity, setCapacity]   = useState("30")
+  const [isSaving, setIsSaving]     = useState(false)
+  const [currentId, setCurrentId]   = useState<number|null>(null)
+  const [name, setName]             = useState("")
+  const [desc, setDesc]             = useState("")
+  const [schedule, setSchedule]     = useState("")
+  const [capacity, setCapacity]     = useState("30")
   const { toast } = useToast()
   const [csvImporting, setCsvImporting] = useState(false)
   const [csvMsg, setCsvMsg]             = useState("")
+
+  const fetchBatches = useCallback(async () => {
+    try {
+      setIsLoading(true)
+      const r = await fetch(`${API}/batches/`).then(r => r.json())
+      setBatches(Array.isArray(r) ? r : (r.data ?? []))
+    } catch { toast({ variant: "destructive", title: "Error", description: "Failed to load batches." }) }
+    finally { setIsLoading(false) }
+  }, [toast])
 
   const handleCsvImport = useCallback(async (file: File) => {
     setCsvImporting(true); setCsvMsg("")
     try {
       const text = await file.text()
-      const r = await axios.post(`${API}/batches/import-csv`, { csv_text: text })
-      const d = r.data
-      setCsvMsg(`✅ Imported ${d.added} batches${d.skipped ? `, skipped ${d.skipped}` : ""}${d.errors?.length ? ` — ${d.errors[0]}` : ""}`)
+      const r = await fetch(`${API}/batches/import-csv`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ csv_text: text })
+      }).then(r => r.json())
+      const d = r.data ?? r
+      setCsvMsg(`✅ Imported ${d.added ?? 0} batches${d.skipped ? `, skipped ${d.skipped}` : ""}`)
       fetchBatches()
-    } catch(e: any) {
-      setCsvMsg(`⚠ ${e.response?.data?.error || "Import failed"}`)
-    } finally { setCsvImporting(false); setTimeout(() => setCsvMsg(""), 6000) }
+    } catch { setCsvMsg("⚠ Import failed") }
+    finally { setCsvImporting(false); setTimeout(() => setCsvMsg(""), 6000) }
   }, [fetchBatches])
-
-  const fetchBatches = useCallback(async () => {
-    try { setIsLoading(true); const r = await axios.get(`${API}/batches/`); setBatches(r.data) }
-    catch { toast({ variant:"destructive", title:"Error", description:"Failed to load batches." }) }
-    finally { setIsLoading(false) }
-  }, [toast])
 
   useEffect(() => { fetchBatches() }, [fetchBatches])
 
-  const openAdd = () => { setName(""); setDesc(""); setSchedule(""); setCapacity("30"); setIsAddOpen(true) }
+  const openAdd  = () => { setName(""); setDesc(""); setSchedule(""); setCapacity("30"); setIsAddOpen(true) }
   const openEdit = (b: Batch) => { setCurrentId(b.id); setName(b.name); setDesc(b.description); setSchedule(b.schedule); setCapacity(String(b.capacity)); setIsEditOpen(true) }
   const closeAll = () => { setIsAddOpen(false); setIsEditOpen(false) }
 
-  const handleAdd = async (e: any) => {
+  const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault(); setIsSaving(true)
-    try { await axios.post(`${API}/batches/add`, { name, description:desc, schedule, capacity:parseInt(capacity) }); toast({ title:"Batch Added" }); closeAll(); fetchBatches() }
-    catch { toast({ variant:"destructive", title:"Error", description:"Failed to add batch." }) }
+    try {
+      await fetch(`${API}/batches/add`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, description: desc, schedule, capacity: parseInt(capacity) })
+      }).then(r => r.json())
+      toast({ title: "Batch Added" }); closeAll(); fetchBatches()
+    } catch { toast({ variant: "destructive", title: "Error", description: "Failed to add batch." }) }
     finally { setIsSaving(false) }
   }
 
-  const handleUpdate = async (e: any) => {
+  const handleUpdate = async (e: React.FormEvent) => {
     e.preventDefault(); if (!currentId) return; setIsSaving(true)
-    try { await axios.put(`${API}/batches/${currentId}`, { name, description:desc, schedule, capacity:parseInt(capacity) }); toast({ title:"Batch Updated" }); closeAll(); fetchBatches() }
-    catch { toast({ variant:"destructive", title:"Error", description:"Failed to update batch." }) }
+    try {
+      await fetch(`${API}/batches/${currentId}`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, description: desc, schedule, capacity: parseInt(capacity) })
+      }).then(r => r.json())
+      toast({ title: "Batch Updated" }); closeAll(); fetchBatches()
+    } catch { toast({ variant: "destructive", title: "Error", description: "Failed to update batch." }) }
     finally { setIsSaving(false) }
   }
 
   const handleDelete = async (id: number, bname: string) => {
     if (!confirm(`Delete batch "${bname}"? Students will be unassigned.`)) return
-    try { await axios.delete(`${API}/batches/${id}`); toast({ title:"Batch Deleted" }); setBatches(p => p.filter(b => b.id !== id)) }
-    catch { toast({ variant:"destructive", title:"Error", description:"Failed to delete batch." }) }
+    try {
+      await fetch(`${API}/batches/${id}`, { method: "DELETE" }).then(r => r.json())
+      toast({ title: "Batch Deleted" }); setBatches(p => p.filter(b => b.id !== id))
+    } catch { toast({ variant: "destructive", title: "Error", description: "Failed to delete batch." }) }
   }
 
   const filtered = useMemo(() => batches.filter(b => b.name.toLowerCase().includes(search.toLowerCase())), [batches, search])
@@ -100,7 +116,7 @@ export default function BatchesPage() {
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div><h1 className="text-3xl font-semibold mb-2">Batches</h1><p className="text-muted-foreground">Organise students into class batches.</p></div>
           <div className="flex gap-2">
-            <label className={`flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-xl text-sm font-medium text-gray-700 hover:bg-gray-50 cursor-pointer transition-colors ${csvImporting?"opacity-60 pointer-events-none":""}`}>
+            <label className={`flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-xl text-sm font-medium text-gray-700 hover:bg-gray-50 cursor-pointer transition-colors ${csvImporting ? "opacity-60 pointer-events-none" : ""}`}>
               {csvImporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4 text-gray-500" />}
               Import CSV
               <input type="file" accept=".csv" className="hidden" onChange={e => e.target.files?.[0] && handleCsvImport(e.target.files[0])} />
@@ -118,9 +134,9 @@ export default function BatchesPage() {
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           {[
-            { label:"Total Batches",    value: batches.length,                                         icon: Layers, color:"text-primary/60" },
-            { label:"Total Students",   value: batches.reduce((s,b)=>s+b.student_count,0),             icon: Users,  color:"text-green-500/60" },
-            { label:"Total Capacity",   value: batches.reduce((s,b)=>s+b.capacity,0),                  icon: Users,  color:"text-accent" },
+            { label: "Total Batches",  value: batches.length,                              icon: Layers, color: "text-primary/60" },
+            { label: "Total Students", value: batches.reduce((s,b) => s+b.student_count,0), icon: Users,  color: "text-green-500/60" },
+            { label: "Total Capacity", value: batches.reduce((s,b) => s+b.capacity,0),      icon: Users,  color: "text-accent" },
           ].map(stat => (
             <Card key={stat.label} className="border-border/50">
               <CardContent className="pt-6">
@@ -171,10 +187,7 @@ export default function BatchesPage() {
                       <tr key={batch.id} className="border-b border-border/50 last:border-0 hover:bg-muted/30">
                         <td className="p-4 align-middle text-muted-foreground">#{batch.id}</td>
                         <td className="p-4 align-middle font-medium">
-                          <div className="flex items-center gap-2">
-                            <span className="w-2 h-2 rounded-full bg-primary inline-block" />
-                            {batch.name}
-                          </div>
+                          <div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-primary inline-block" />{batch.name}</div>
                         </td>
                         <td className="p-4 align-middle text-muted-foreground hidden md:table-cell">{batch.schedule || "—"}</td>
                         <td className="p-4 align-middle text-muted-foreground hidden md:table-cell max-w-[160px]"><span className="line-clamp-1">{batch.description || "—"}</span></td>

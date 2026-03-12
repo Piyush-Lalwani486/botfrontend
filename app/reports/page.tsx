@@ -12,7 +12,6 @@ import { format } from "date-fns"
 import { cn } from "@/lib/utils"
 import { ReportsTable } from "@/components/reports-table"
 import { useToast } from "@/hooks/use-toast"
-import axios from "axios"
 
 const API = "http://127.0.0.1:5000"
 
@@ -31,7 +30,7 @@ export default function ReportsPage() {
       if (status   && status   !== "all")  params.append("status",     status)
       if (userType && userType !== "all")  params.append("user_type",  userType)
 
-      const res     = await axios.get(`${API}/attendance/reports?${params.toString()}`)
+      const res     = await fetch(`${API}/attendance/reports?${params.toString()}`).then(r=>r.json())
       const records = res.data
       const headers = ["Date", "Name", "Type", "Class/Subject", "Status"]
       const rows    = records.map((r: any) => [r.date, r.name, r.type, r.class, r.status])

@@ -10,7 +10,6 @@ import { CalendarIcon, ArrowLeft, Loader2, Trash2, Edit, X, Check } from "lucide
 import { format } from "date-fns"
 import { cn } from "@/lib/utils"
 import Link from "next/link"
-import axios from "axios"
 import { useToast } from "@/hooks/use-toast"
 
 const API = "http://127.0.0.1:5000"
@@ -39,7 +38,7 @@ export default function StudentAttendanceRecordsPage() {
       const params: any = {}
       if (date) params.date = format(date, "yyyy-MM-dd")
       if (selectedCourse !== "all") params.course = selectedCourse
-      const r = await axios.get<AttendanceRecord[]>(`${API}/attendance/records`, { params })
+      const r = await fetch(`${API}/attendance/records?${new URLSearchParams(params as any).toString()}`).then(r=>r.json())
       setRecords(r.data)
     } catch { toast({ variant:"destructive", title:"Error", description:"Failed to load records." }) }
     finally { setIsLoading(false) }
@@ -50,7 +49,7 @@ export default function StudentAttendanceRecordsPage() {
   const handleDelete = async (id: number) => {
     if (!confirm("Delete this attendance record?")) return
     try {
-      await axios.delete(`${API}/attendance/records/${id}`)
+      await fetch(`${API}/attendance/records/${id}`, {method:"DELETE"}).then(r=>r.json())
       toast({ title:"Record Deleted" })
       setRecords(prev => prev.filter(r => r.id !== id))
     } catch(e: any) { toast({ variant:"destructive", title:"Error", description: e.response?.data?.error || "Failed to delete." }) }
@@ -61,7 +60,7 @@ export default function StudentAttendanceRecordsPage() {
   const saveEdit = async (id: number) => {
     setIsUpdating(true)
     try {
-      await axios.put(`${API}/attendance/records/${id}`, { status: editStatus })
+      await fetch(`${API}/attendance/records/${id}`, {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({ status: editStatus })}).then(r=>r.json())
       toast({ title:"Record Updated" })
       setRecords(prev => prev.map(r => r.id === id ? { ...r, status: editStatus } : r))
       setEditId(null)

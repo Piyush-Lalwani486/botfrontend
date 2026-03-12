@@ -7,7 +7,6 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { UserPlus, Loader2, Edit, Trash2, X, KeyRound } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
-import axios from "axios"
 
 const API = "http://127.0.0.1:5000"
 
@@ -60,8 +59,8 @@ export function StaffManagement() {
   const fetchStaff = async () => {
     try {
       setIsLoading(true)
-      const res = await axios.get<StaffMember[]>(`${API}/login/debug/users`)
-      setStaff(res.data)
+      const res = await fetch(`${API}/login/debug/users`).then(r=>r.json())
+      setStaff(res)
     } catch (e) { console.error("Failed to fetch staff", e) }
     finally { setIsLoading(false) }
   }
@@ -76,7 +75,7 @@ export function StaffManagement() {
   const handleAdd = useCallback(async (e: React.FormEvent) => {
     e.preventDefault(); setIsSaving(true)
     try {
-      await axios.post(`${API}/login/add`, { name: formName, password: formPassword })
+      await fetch(`${API}/login/add`, {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ name: formName, password: formPassword })}).then(r=>r.json())
       toast({ title: "Staff Added", description: `${formName} can now log in.` })
       setIsAddOpen(false); fetchStaff()
     } catch (error: any) {
@@ -90,7 +89,7 @@ export function StaffManagement() {
       const payload: any = {}
       if (formName.trim()) payload.name = formName.trim()
       if (formPassword.trim()) payload.password = formPassword.trim()
-      await axios.put(`${API}/login/users/${currentId}`, payload)
+      await fetch(`${API}/login/users/${currentId}`, {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)}).then(r=>r.json())
       toast({ title: "User Updated" })
       setIsEditOpen(false); fetchStaff()
     } catch (error: any) {
@@ -101,7 +100,7 @@ export function StaffManagement() {
   const handleDelete = useCallback(async (id: number, memberName: string) => {
     if (!confirm(`Remove staff member "${memberName}"? This cannot be undone.`)) return
     try {
-      await axios.delete(`${API}/login/users/${id}`)
+      await fetch(`${API}/login/users/${id}`, {method:"DELETE"}).then(r=>r.json())
       toast({ title: "User Removed", description: `${memberName} has been deleted.` })
       setStaff(prev => prev.filter(s => s.id !== id))
     } catch {

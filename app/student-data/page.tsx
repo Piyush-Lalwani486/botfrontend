@@ -7,12 +7,10 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Plus, Search, User, Edit, Trash2, Loader2, X, UserCheck, UserMinus, CreditCard, QrCode, Upload, FileText, RefreshCw } from "lucide-react"
-import { format } from "date-fns"
 import { useToast } from "@/hooks/use-toast"
 import { useRouter } from "next/navigation"
-import axios from "axios"
 
-const API = "http://127.0.0.1:5000"
+const API = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:5000"
 
 interface Course { id: number; name: string }
 interface Batch  { id: number; name: string }
@@ -70,11 +68,15 @@ function RollPreview({ batchId, courseIds, manual }: { batchId: string; courseId
     timerRef.current = setTimeout(async () => {
       setLoading(true)
       try {
-        const r = await axios.post(`${API}/students/preview-roll`, {
-          batch_id:   batchId !== "none" ? parseInt(batchId) : null,
-          course_ids: courseIds,
-        })
-        setPreview(r.data)
+        const r = await fetch(`${API}/students/preview-roll`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            batch_id:   batchId !== "none" ? parseInt(batchId) : null,
+            course_ids: courseIds,
+          })
+        }).then(r => r.json())
+        setPreview(r)
       } catch { setPreview(null) }
       finally { setLoading(false) }
     }, 400)
@@ -177,8 +179,8 @@ export default function StudentDataPage() {
   const fetchStudents = useCallback(async () => {
     try {
       setIsLoading(true)
-      const r = await axios.get<Student[]>(`${API}/students/`)
-      setStudents(r.data)
+      const r = await fetch(`${API}/students/`).then(r=>r.json())
+      setStudents(r)
     } catch { toast({ variant:"destructive", title:"Error", description:"Failed to load students." }) }
     finally { setIsLoading(false) }
   }, [toast])
@@ -187,7 +189,7 @@ export default function StudentDataPage() {
     setCsvImporting(true); setCsvMsg("")
     try {
       const text = await file.text()
-      const r = await axios.post(`${API}/students/import-csv`, { csv_text: text })
+      const r = await fetch(`${API}/students/import-csv`, {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ csv_text: text })}).then(r=>r.json())
       const d = r.data
       setCsvMsg(`✅ Imported ${d.added} students${d.skipped ? `, skipped ${d.skipped}` : ""}${d.errors?.length ? ` — ${d.errors[0]}` : ""}`)
       fetchStudents()
@@ -198,14 +200,14 @@ export default function StudentDataPage() {
 
   useEffect(() => {
     fetchStudents()
-    axios.get(`${API}/students/courses/all`).then(r => setAllCourses(r.data)).catch(()=>{})
-    axios.get(`${API}/batches/`).then(r => setAllBatches(r.data)).catch(()=>{})
+    fetch(`${API}/students/courses/all`).then(r=>r.json()).then(r => setAllCourses(Array.isArray(r) ? r : (r.data ?? []))).catch(()=>{})
+    fetch(`${API}/batches/`).then(r=>r.json()).then(r => setAllBatches(Array.isArray(r) ? r : (r.data ?? []))).catch(()=>{})
   }, [fetchStudents])
 
   const handleDelete = useCallback(async (id: number) => {
     if (!confirm("Delete this student? This cannot be undone.")) return
     try {
-      await axios.delete(`${API}/students/${id}`)
+      await fetch(`${API}/students/${id}`, {method:"DELETE"}).then(r=>r.json())
       toast({ title:"Student Deleted" })
       setStudents(prev => prev.filter(s => s.id !== id))
     } catch(e: any) {
@@ -242,7 +244,7 @@ export default function StudentDataPage() {
   const handleSaveNew = useCallback(async (e: React.FormEvent) => {
     e.preventDefault(); setIsSaving(true)
     try {
-      const r = await axios.post(`${API}/students/add`, formData())
+      const r = await fetch(`${API}/students/add`, {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(formData())}).then(r=>r.json())
       const d = r.data
       toast({
         title: `✅ ${d.roll_number} — Student Added!`,
@@ -256,7 +258,7 @@ export default function StudentDataPage() {
   const handleUpdate = useCallback(async (e: React.FormEvent) => {
     e.preventDefault(); if (!currentId) return; setIsSaving(true)
     try {
-      await axios.put(`${API}/students/${currentId}`, formData())
+      await fetch(`${API}/students/${currentId}`, {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(formData())}).then(r=>r.json())
       toast({ title:"Student Updated" }); setIsEditOpen(false); fetchStudents()
     } catch(e: any) { toast({ variant:"destructive", title:"Error", description: e.response?.data?.error || "Failed to update." }) }
     finally { setIsSaving(false) }
@@ -264,7 +266,7 @@ export default function StudentDataPage() {
 
   const handleEnrollSave = useCallback(async (studentId: number, courseIds: number[]) => {
     try {
-      await axios.patch(`${API}/students/${studentId}/enrollment`, { course_ids: courseIds })
+      await fetch(`${API}/students/${studentId}/enrollment`, {method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({ course_ids: courseIds })}).then(r=>r.json())
       toast({ title:"Enrollment Updated" }); setEnrollStudent(null); fetchStudents()
     } catch { toast({ variant:"destructive", title:"Error", description:"Failed to update enrollment." }) }
   }, [toast])
@@ -298,7 +300,7 @@ export default function StudentDataPage() {
             </label>
             <Button variant="outline" onClick={() => router.push("/student-id-cards")}><CreditCard className="mr-2 h-4 w-4" />ID Cards</Button>
             <>
-              <a href="http://127.0.0.1:5000/students/export-csv" download
+              <a href={`${API}/students/export-csv`} download
                 className="inline-flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-medium transition-colors">
                 <FileText className="h-4 w-4" /> Export CSV
               </a>
@@ -480,22 +482,3 @@ function EnrollModal({ student, allCourses, onClose, onSave }: {
     </form>
   )
 }
-
-const CourseSelector2 = memo(({ allCourses, selectedCourseIds, onToggle }:
-  { allCourses: Course[]; selectedCourseIds: number[]; onToggle: (id: number) => void }) => (
-  <div className="space-y-2">
-    <Label>Courses</Label>
-    {allCourses.length === 0
-      ? <p className="text-sm text-muted-foreground">No courses available.</p>
-      : <div className="grid grid-cols-2 gap-2">
-          {allCourses.map(course => (
-            <label key={course.id} className={`flex items-center gap-2 p-2 rounded-md border cursor-pointer text-sm transition-colors ${selectedCourseIds.includes(course.id) ? "border-primary bg-primary/5 text-primary" : "border-border hover:bg-muted/50"}`}>
-              <input type="checkbox" className="hidden" checked={selectedCourseIds.includes(course.id)} onChange={() => onToggle(course.id)} />
-              {selectedCourseIds.includes(course.id) ? "✓" : "○"} {course.name}
-            </label>
-          ))}
-        </div>
-    }
-  </div>
-))
-CourseSelector2.displayName = "CourseSelector2"

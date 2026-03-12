@@ -25,7 +25,7 @@ export default function PaymentsPage() {
   const [tab,     setTab]         = useState<"overview"|"students"|"alerts">("overview")
   const [search,  setSearch]      = useState("")
   const [batchFilter, setBatch]   = useState("all")
-  const [days,    setDays]        = useState(30)
+  const [dueDate, setDueDate]     = useState(() => new Date().toISOString().split('T')[0])
   const [sending, setSending]     = useState(false)
   const [sendResult, setSendResult] = useState("")
   const [csvFile, setCsvFile]     = useState<File|null>(null)
@@ -54,7 +54,7 @@ export default function PaymentsPage() {
     try {
       const r = await fetch(`${API}/api/fee-alerts/check`, {
         method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ csv_text: csvText, days })
+        body: JSON.stringify({ csv_text: csvText, due_date: dueDate })
       })
       const d = await r.json()
       setAlerts(d.alerts || []); setTab("alerts")
@@ -67,7 +67,7 @@ export default function PaymentsPage() {
     try {
       const r = await fetch(`${API}/api/fee-alerts/send`, {
         method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ csv_text: csvText, days_threshold: days })
+        body: JSON.stringify({ csv_text: csvText, due_date: dueDate })
       })
       const d = await r.json()
       if (d.error) setSendResult(`⚠ ${d.error}`)
@@ -247,10 +247,9 @@ export default function PaymentsPage() {
             <div className="bg-white rounded-2xl p-5 border border-gray-100 space-y-4">
               <div className="flex items-center gap-4 flex-wrap">
                 <div className="flex items-center gap-2 text-sm text-gray-700">
-                  <span>Overdue by more than</span>
-                  <input type="number" value={days} onChange={e=>setDays(Number(e.target.value))} min={1} max={365}
-                    className="w-16 border border-gray-200 rounded-lg px-2 py-1 text-center text-sm outline-none" />
-                  <span>days</span>
+                  <span>Students whose last payment was before:</span>
+                  <input type="date" value={dueDate} onChange={e=>setDueDate(e.target.value)}
+                    className="border border-gray-200 rounded-lg px-2 py-1 text-sm outline-none focus:border-[#F16265]" />
                 </div>
                 <button onClick={checkAlerts} className="px-4 py-2 bg-[#F16265] text-white rounded-xl text-sm font-medium hover:bg-[#D94F52] transition-colors">
                   Check Alerts
@@ -283,7 +282,7 @@ export default function PaymentsPage() {
                     <span className="font-semibold text-gray-900">{a.name}</span>
                     <span className="text-xs text-gray-500 font-mono">{a.roll}</span>
                     <span className="px-2 py-0.5 bg-blue-50 text-blue-700 rounded-full text-xs">{a.batch}</span>
-                    <span className="px-2 py-0.5 bg-red-50 text-red-600 rounded-full text-xs font-semibold">{a.days_overdue} days overdue</span>
+                    <span className="px-2 py-0.5 bg-red-50 text-red-600 rounded-full text-xs font-semibold">Last paid: {a.last_payment || "Never"}</span>
                   </div>
                   <div className="mt-1 text-sm text-gray-600">Pending: <span className="font-bold text-red-600">{fmt(a.pending)}</span> · Last: {a.last_payment||"Never"} · 📞 {a.phone}</div>
                 </div>

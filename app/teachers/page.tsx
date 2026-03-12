@@ -1,5 +1,4 @@
 "use client"
-
 import { useEffect, useState, useCallback, useMemo, memo } from "react"
 import { DashboardLayout } from "@/components/dashboard-layout"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -8,9 +7,8 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Plus, Search, User, Edit, Trash2, Loader2, X, BookOpen, Upload, FileText } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
-import axios from "axios"
 
-const API = "http://127.0.0.1:5000"
+const API = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:5000"
 
 interface Teacher { id: number; name: string; email: string; subject: string; course_count: number; courses: string[] }
 
@@ -54,63 +52,71 @@ export default function TeacherManagementPage() {
   const [csvImporting, setCsvImporting] = useState(false)
   const [csvMsg, setCsvMsg]             = useState("")
 
+  const fetchTeachers = useCallback(async () => {
+    try {
+      setIsLoading(true)
+      const res = await fetch(`${API}/teacher_details/`).then(r => r.json())
+      setTeachers(Array.isArray(res) ? res : (res.data ?? []))
+    } catch {
+      toast({ variant: "destructive", title: "Connection Error", description: "Could not load teacher data." })
+    } finally { setIsLoading(false) }
+  }, [toast])
+
   const handleCsvImport = useCallback(async (file: File) => {
     setCsvImporting(true); setCsvMsg("")
     try {
       const text = await file.text()
-      const r = await axios.post(`${API}/teacher_details/import-csv`, { csv_text: text })
-      const d = r.data
-      setCsvMsg(`✅ Imported ${d.added} teachers${d.skipped ? `, skipped ${d.skipped}` : ""}${d.errors?.length ? ` — ${d.errors[0]}` : ""}`)
+      const r = await fetch(`${API}/teacher_details/import-csv`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ csv_text: text })
+      }).then(r => r.json())
+      const d = r.data ?? r
+      setCsvMsg(`✅ Imported ${d.added ?? 0} teachers${d.skipped ? `, skipped ${d.skipped}` : ""}`)
       fetchTeachers()
-    } catch(e: any) {
-      setCsvMsg(`⚠ ${e.response?.data?.error || "Import failed"}`)
-    } finally { setCsvImporting(false); setTimeout(() => setCsvMsg(""), 6000) }
+    } catch { setCsvMsg("⚠ Import failed") }
+    finally { setCsvImporting(false); setTimeout(() => setCsvMsg(""), 6000) }
   }, [fetchTeachers])
 
-  useEffect(() => { fetchTeachers() }, [])
-
-  const fetchTeachers = async () => {
-    try {
-      setIsLoading(true)
-      const res = await axios.get<Teacher[]>(`${API}/teacher_details/`)
-      setTeachers(res.data)
-    } catch {
-      toast({ variant: "destructive", title: "Connection Error", description: "Could not load teacher data." })
-    } finally { setIsLoading(false) }
-  }
+  useEffect(() => { fetchTeachers() }, [fetchTeachers])
 
   const handleDelete = useCallback(async (id: number, teacherName: string) => {
     if (!confirm(`Remove "${teacherName}"?`)) return
     try {
-      await axios.delete(`${API}/teacher_details/${id}`)
+      await fetch(`${API}/teacher_details/${id}`, { method: "DELETE" }).then(r => r.json())
       toast({ title: "Teacher Removed" })
       setTeachers(prev => prev.filter(t => t.id !== id))
     } catch { toast({ variant: "destructive", title: "Error", description: "Failed to delete teacher." }) }
   }, [toast])
 
-  const openAddModal = useCallback(() => { setName(""); setEmail(""); setSubject(""); setIsAddOpen(true) }, [])
+  const openAddModal  = useCallback(() => { setName(""); setEmail(""); setSubject(""); setIsAddOpen(true) }, [])
   const openEditModal = useCallback((t: Teacher) => { setCurrentId(t.id); setName(t.name); setEmail(t.email); setSubject(t.subject); setIsEditOpen(true) }, [])
-  const closeAll = useCallback(() => { setIsAddOpen(false); setIsEditOpen(false) }, [])
+  const closeAll      = useCallback(() => { setIsAddOpen(false); setIsEditOpen(false) }, [])
 
   const handleSaveNew = useCallback(async (e: React.FormEvent) => {
     e.preventDefault(); setIsSaving(true)
     try {
-      await axios.post(`${API}/teacher_details/add`, { name, email, subject })
+      await fetch(`${API}/teacher_details/add`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, email, subject })
+      }).then(r => r.json())
       toast({ title: "Success", description: "New teacher added!" }); setIsAddOpen(false); fetchTeachers()
     } catch (error: any) {
-      toast({ variant: "destructive", title: "Error", description: error.response?.status === 409 ? "Email already exists." : "Failed to save teacher." })
+      toast({ variant: "destructive", title: "Error", description: error?.status === 409 ? "Email already exists." : "Failed to save teacher." })
     } finally { setIsSaving(false) }
-  }, [name, email, subject, toast])
+  }, [name, email, subject, toast, fetchTeachers])
 
   const handleUpdate = useCallback(async (e: React.FormEvent) => {
     e.preventDefault(); if (!currentId) return; setIsSaving(true)
     try {
-      await axios.put(`${API}/teacher_details/${currentId}`, { name, email, subject })
+      await fetch(`${API}/teacher_details/${currentId}`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, email, subject })
+      }).then(r => r.json())
       toast({ title: "Updated" }); setIsEditOpen(false); fetchTeachers()
     } catch (error: any) {
-      toast({ variant: "destructive", title: "Error", description: error.response?.status === 409 ? "Email already exists." : "Failed to update." })
+      toast({ variant: "destructive", title: "Error", description: error?.status === 409 ? "Email already exists." : "Failed to update." })
     } finally { setIsSaving(false) }
-  }, [currentId, name, email, subject, toast])
+  }, [currentId, name, email, subject, toast, fetchTeachers])
 
   const filteredTeachers = useMemo(() =>
     teachers.filter(t =>
@@ -123,15 +129,13 @@ export default function TeacherManagementPage() {
     <DashboardLayout>
       <div className="space-y-6 animate-fade-in relative">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-          <div className="flex gap-2">
-            <a href="http://127.0.0.1:5000/api/export/teachers" download
-              className="inline-flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-medium transition-colors">
-              ⬇ Export CSV
-            </a>
-          </div>
           <div><h1 className="text-3xl font-semibold mb-2">Teacher Management</h1><p className="text-muted-foreground">Manage teacher profiles and subject assignments.</p></div>
-          <div className="flex gap-2">
-            <label className={`flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-xl text-sm font-medium text-gray-700 hover:bg-gray-50 cursor-pointer transition-colors ${csvImporting?"opacity-60 pointer-events-none":""}`}>
+          <div className="flex gap-2 flex-wrap">
+            <a href={`${API}/api/export/teachers`} download
+              className="inline-flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-medium transition-colors">
+              <FileText className="h-4 w-4" /> Export CSV
+            </a>
+            <label className={`flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-xl text-sm font-medium text-gray-700 hover:bg-gray-50 cursor-pointer transition-colors ${csvImporting ? "opacity-60 pointer-events-none" : ""}`}>
               {csvImporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4 text-gray-500" />}
               Import CSV
               <input type="file" accept=".csv" className="hidden" onChange={e => e.target.files?.[0] && handleCsvImport(e.target.files[0])} />
@@ -205,7 +209,7 @@ export default function TeacherManagementPage() {
                           <span className="inline-flex items-center rounded-md bg-accent/20 px-2 py-1 text-xs font-medium text-foreground border border-accent/40">{teacher.subject}</span>
                         </td>
                         <td className="p-4 align-middle hidden md:table-cell">
-                          {teacher.courses.length > 0
+                          {teacher.courses?.length > 0
                             ? <div className="flex flex-wrap gap-1">{teacher.courses.map(c => <span key={c} className="inline-flex items-center rounded-md bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">{c}</span>)}</div>
                             : <span className="text-xs text-muted-foreground italic">No courses assigned</span>}
                         </td>

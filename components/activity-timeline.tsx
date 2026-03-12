@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react"
 import { Clock, UserCheck, Users, Loader2 } from "lucide-react"
-import axios from "axios"
 
 const API = "http://127.0.0.1:5000"
 
@@ -19,8 +18,8 @@ export function ActivityTimeline() {
   useEffect(() => {
     const fetchActivities = async () => {
       try {
-        const res = await axios.get<Activity[]>(`${API}/activity/?limit=10`)
-        setActivities(res.data)
+        const res = await fetch(`${API}/activity/?limit=10`).then(r=>r.json())
+        setActivities(res)
       } catch (e) { console.error("Failed to fetch activities", e) }
       finally { setIsLoading(false) }
     }

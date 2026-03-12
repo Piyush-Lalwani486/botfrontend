@@ -1,5 +1,4 @@
 "use client"
-
 import { useEffect, useState, useCallback, useMemo, memo } from "react"
 import { DashboardLayout } from "@/components/dashboard-layout"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -10,9 +9,8 @@ import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Plus, Search, BookOpen, Edit, Trash2, Loader2, X, Users, Upload, FileText } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
-import axios from "axios"
 
-const API = "http://127.0.0.1:5000"
+const API = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:5000"
 
 interface Teacher { id: number; name: string }
 interface Course { id: number; name: string; description: string; teacher_id: number | null; teacher_name: string | null; student_count: number }
@@ -75,38 +73,40 @@ export default function CoursesPage() {
   const [csvImporting, setCsvImporting] = useState(false)
   const [csvMsg, setCsvMsg]             = useState("")
 
+  const fetchCourses = useCallback(async () => {
+    try {
+      setIsLoading(true)
+      const res = await fetch(`${API}/courses/`).then(r => r.json())
+      setCourses(Array.isArray(res) ? res : (res.data ?? []))
+    } catch { toast({ variant: "destructive", title: "Error", description: "Failed to load courses." }) }
+    finally { setIsLoading(false) }
+  }, [toast])
+
+  const fetchTeachers = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/courses/teachers/all`).then(r => r.json())
+      setTeachers(Array.isArray(res) ? res : (res.data ?? []))
+    } catch { /* teachers optional */ }
+  }, [])
+
   const handleCsvImport = useCallback(async (file: File) => {
     setCsvImporting(true); setCsvMsg("")
     try {
       const text = await file.text()
-      const r = await axios.post(`${API}/courses/import-csv`, { csv_text: text })
-      const d = r.data
-      setCsvMsg(`✅ Imported ${d.added} courses${d.skipped ? `, skipped ${d.skipped}` : ""}${d.errors?.length ? ` — ${d.errors[0]}` : ""}`)
+      const r = await fetch(`${API}/courses/import-csv`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ csv_text: text })
+      }).then(r => r.json())
+      const d = r.data ?? r
+      setCsvMsg(`✅ Imported ${d.added ?? 0} courses${d.skipped ? `, skipped ${d.skipped}` : ""}`)
       fetchCourses()
-    } catch(e: any) {
-      setCsvMsg(`⚠ ${e.response?.data?.error || "Import failed"}`)
-    } finally { setCsvImporting(false); setTimeout(() => setCsvMsg(""), 6000) }
-  }, [])
+    } catch { setCsvMsg("⚠ Import failed") }
+    finally { setCsvImporting(false); setTimeout(() => setCsvMsg(""), 6000) }
+  }, [fetchCourses])
 
-  useEffect(() => { fetchCourses(); fetchTeachers() }, [])
+  useEffect(() => { fetchCourses(); fetchTeachers() }, [fetchCourses, fetchTeachers])
 
-  const fetchCourses = async () => {
-    try {
-      setIsLoading(true)
-      const res = await axios.get<Course[]>(`${API}/courses/`)
-      setCourses(res.data)
-    } catch { toast({ variant: "destructive", title: "Error", description: "Failed to load courses." }) }
-    finally { setIsLoading(false) }
-  }
-
-  const fetchTeachers = async () => {
-    try {
-      const res = await axios.get<Teacher[]>(`${API}/courses/teachers/all`)
-      setTeachers(res.data)
-    } catch (e) { console.error("Failed to load teachers", e) }
-  }
-
-  const openAddModal = useCallback(() => { setName(""); setDescription(""); setTeacherId("none"); setIsAddOpen(true) }, [])
+  const openAddModal  = useCallback(() => { setName(""); setDescription(""); setTeacherId("none"); setIsAddOpen(true) }, [])
   const openEditModal = useCallback((c: Course) => {
     setCurrentId(c.id); setName(c.name); setDescription(c.description)
     setTeacherId(c.teacher_id ? c.teacher_id.toString() : "none"); setIsEditOpen(true)
@@ -116,25 +116,31 @@ export default function CoursesPage() {
   const handleAdd = useCallback(async (e: React.FormEvent) => {
     e.preventDefault(); setIsSaving(true)
     try {
-      await axios.post(`${API}/courses/add`, { name, description, teacher_id: teacherId !== "none" ? parseInt(teacherId) : null })
+      await fetch(`${API}/courses/add`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, description, teacher_id: teacherId !== "none" ? parseInt(teacherId) : null })
+      }).then(r => r.json())
       toast({ title: "Course Added", description: `${name} created successfully.` }); setIsAddOpen(false); fetchCourses()
     } catch { toast({ variant: "destructive", title: "Error", description: "Failed to add course." }) }
     finally { setIsSaving(false) }
-  }, [name, description, teacherId, toast])
+  }, [name, description, teacherId, toast, fetchCourses])
 
   const handleUpdate = useCallback(async (e: React.FormEvent) => {
     e.preventDefault(); if (!currentId) return; setIsSaving(true)
     try {
-      await axios.put(`${API}/courses/${currentId}`, { name, description, teacher_id: teacherId !== "none" ? parseInt(teacherId) : null })
+      await fetch(`${API}/courses/${currentId}`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, description, teacher_id: teacherId !== "none" ? parseInt(teacherId) : null })
+      }).then(r => r.json())
       toast({ title: "Course Updated" }); setIsEditOpen(false); fetchCourses()
     } catch { toast({ variant: "destructive", title: "Error", description: "Failed to update course." }) }
     finally { setIsSaving(false) }
-  }, [currentId, name, description, teacherId, toast])
+  }, [currentId, name, description, teacherId, toast, fetchCourses])
 
   const handleDelete = useCallback(async (id: number, courseName: string) => {
     if (!confirm(`Delete "${courseName}"?`)) return
     try {
-      await axios.delete(`${API}/courses/${id}`)
+      await fetch(`${API}/courses/${id}`, { method: "DELETE" }).then(r => r.json())
       toast({ title: "Course Deleted" })
       setCourses(prev => prev.filter(c => c.id !== id))
     } catch { toast({ variant: "destructive", title: "Error", description: "Failed to delete course." }) }
@@ -152,7 +158,7 @@ export default function CoursesPage() {
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div><h1 className="text-3xl font-semibold mb-2">Courses</h1><p className="text-muted-foreground">Manage courses and teacher assignments.</p></div>
           <div className="flex gap-2">
-            <label className={`flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-xl text-sm font-medium text-gray-700 hover:bg-gray-50 cursor-pointer transition-colors ${csvImporting?"opacity-60 pointer-events-none":""}`}>
+            <label className={`flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-xl text-sm font-medium text-gray-700 hover:bg-gray-50 cursor-pointer transition-colors ${csvImporting ? "opacity-60 pointer-events-none" : ""}`}>
               {csvImporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4 text-gray-500" />}
               Import CSV
               <input type="file" accept=".csv" className="hidden" onChange={e => e.target.files?.[0] && handleCsvImport(e.target.files[0])} />
@@ -165,7 +171,7 @@ export default function CoursesPage() {
 
         <div className="bg-blue-50 border border-blue-100 rounded-xl px-4 py-3 text-xs text-blue-700 flex items-start gap-2">
           <FileText className="w-4 h-4 mt-0.5 flex-shrink-0" />
-          <span><strong>CSV Import columns:</strong> Name, Description, TeacherName (must match an existing teacher's name)</span>
+          <span><strong>CSV Import columns:</strong> Name, Description, TeacherName (must match an existing teacher&apos;s name)</span>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">

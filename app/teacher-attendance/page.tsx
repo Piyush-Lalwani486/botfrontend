@@ -1,5 +1,4 @@
 "use client"
-
 import { useState, useEffect } from "react"
 import { DashboardLayout } from "@/components/dashboard-layout"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -12,9 +11,8 @@ import { format } from "date-fns"
 import { cn } from "@/lib/utils"
 import { useToast } from "@/hooks/use-toast"
 import Link from "next/link"
-import axios from "axios"
 
-const API = "http://127.0.0.1:5000"
+const API = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:5000"
 
 interface Teacher { id: number; name: string; email: string; subject: string }
 interface AttendanceRecord { [teacherId: number]: string }
@@ -31,17 +29,18 @@ export default function TeacherAttendancePage() {
     const fetchTeachers = async () => {
       try {
         setIsLoading(true)
-        const res = await axios.get<Teacher[]>(`${API}/teacher-attendance/`)
-        setTeachers(res.data)
+        const res = await fetch(`${API}/teacher-attendance/`).then(r => r.json())
+        const list: Teacher[] = Array.isArray(res) ? res : (res.data ?? [])
+        setTeachers(list)
         const init: AttendanceRecord = {}
-        res.data.forEach(t => { init[t.id] = "Present" })
+        list.forEach(t => { init[t.id] = "Present" })
         setAttendance(init)
       } catch {
         toast({ variant: "destructive", title: "Error", description: "Failed to load teachers." })
       } finally { setIsLoading(false) }
     }
     fetchTeachers()
-  }, [])
+  }, []) // eslint-disable-line
 
   const handleStatusChange = (teacherId: number, status: string) =>
     setAttendance(prev => ({ ...prev, [teacherId]: status }))
@@ -49,12 +48,16 @@ export default function TeacherAttendancePage() {
   const handleSave = async () => {
     setIsSaving(true)
     try {
-      await axios.post(`${API}/teacher-attendance/save`, {
-        date:    format(date, "yyyy-MM-dd"),
-        records: Object.entries(attendance).map(([id, status]) => ({
-          teacher_id: parseInt(id), status
-        })),
-      })
+      await fetch(`${API}/teacher-attendance/save`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          date:    format(date, "yyyy-MM-dd"),
+          records: Object.entries(attendance).map(([id, status]) => ({
+            teacher_id: parseInt(id), status
+          })),
+        })
+      }).then(r => r.json())
       toast({ title: "Attendance Saved", description: `Recorded for ${format(date, "MMM d, yyyy")}.` })
     } catch {
       toast({ variant: "destructive", title: "Save Failed", description: "Could not save attendance." })

@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Loader2 } from "lucide-react"
-import axios from "axios"
 
 const API = "http://127.0.0.1:5000"
 
@@ -24,8 +23,8 @@ export function ReportsTable({ dateFrom, dateTo, status, userType }: ReportsTabl
       if (dateTo)                          params.append("date_to",   dateTo)
       if (status   && status   !== "all")  params.append("status",    status)
       if (userType && userType !== "all")  params.append("user_type", userType)
-      const res = await axios.get<ReportRecord[]>(`${API}/attendance/reports?${params.toString()}`)
-      setRecords(res.data)
+      const res = await fetch(`${API}/attendance/reports?${params.toString()}`).then(r=>r.json())
+      setRecords(res)
     } catch (e) { console.error("Failed to fetch reports", e) }
     finally { setIsLoading(false) }
   }

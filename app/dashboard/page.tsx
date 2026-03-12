@@ -2,7 +2,6 @@
 import { useEffect, useState } from "react"
 import { DashboardLayout } from "@/components/dashboard-layout"
 import { Users, UserCheck, BookOpen, Layers, TrendingDown, IndianRupee, ReceiptText, Loader2, ArrowUpRight } from "lucide-react"
-import axios from "axios"
 import Link from "next/link"
 
 const API = "http://127.0.0.1:5000"
@@ -19,8 +18,8 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    axios.get(`${API}/api/overview`)
-      .then(r => setStats(r.data))
+    fetch(`${API}/api/overview`).then(r=>r.json())
+      .then(r => setStats(r))
       .catch(() => {})
       .finally(() => setLoading(false))
   }, [])

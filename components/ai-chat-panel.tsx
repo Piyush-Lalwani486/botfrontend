@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button"
 import { X, Send, Mic, MicOff, Volume2, VolumeX, Trash2, Copy, Check } from "lucide-react"
 import { cn } from "@/lib/utils"
 
-const API = "http://127.0.0.1:5000"
+const API = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:5000"
 
 const TOPICS = [
   { k: "general",  label: "General" },
@@ -53,7 +53,12 @@ export function AIChatPanel({ onClose }: { onClose: () => void }) {
       const res  = await fetch(`${API}/api/chat`, {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ messages: newMsgs.map(m => ({ role: m.role, content: m.content })), topic }),
+        body:    JSON.stringify({
+          messages: newMsgs.map(m => ({ role: m.role, content: m.content })),
+          role: "staff",
+          exam: "general",
+          topic,
+        }),
       })
       const data = await res.json()
       const reply = data.error ? `Error: ${data.error}` : data.reply
